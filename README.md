@@ -247,7 +247,7 @@ Populate with your configuration:
 DEBUG=False
 SECRET_KEY=your_production_secret_key_here
 ALLOWED_HOSTS=*
-CSRF_TRUSTED_ORIGINS=https://*.vercel.app,http://13.234.4.236
+CSRF_TRUSTED_ORIGINS=https://*.vercel.app,http://<your-ec2-ip-or-domain>
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
 Save with `Ctrl + O` -> `Enter` -> `Ctrl + X`.
@@ -301,9 +301,10 @@ Paste the following configuration (replace `13.234.4.236` with your public IP):
 ```nginx
 server {
     listen 80;
-    server_name 13.234.4.236;
+    server_name <your-ec2-ip-or-domain>;
 
     client_max_body_size 50M;
+
 
     # Proxy API requests to Gunicorn
     location / {
@@ -359,7 +360,8 @@ sudo systemctl reload nginx
 #### 2. Set Environment Variables
 In the **Environment Variables** section:
 * `NEXT_PUBLIC_API_URL`: `/api`
-* `BACKEND_API_URL`: `http://13.234.4.236/api` (your EC2 public IP)
+* `BACKEND_API_URL`: `http://<your-ec2-ip-or-domain>/api`
+
 
 #### 3. Mixed Content & SSL Protection
 Because Vercel runs on `https://` and EC2 IP addresses default to `http://`, the frontend includes built-in Next.js proxy route handlers (`/api/backend/*` and `/media/*`). This routes calls server-to-server, preventing browser Mixed Content blocking while ensuring fast streaming.
