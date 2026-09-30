@@ -12,7 +12,8 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-car-mechanic-chatbot-super
 
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,*').split(',')
+raw_hosts = os.getenv('ALLOWED_HOSTS', '*')
+ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(',') if h.strip()] if raw_hosts else ['*']
 
 # Installed Apps
 INSTALLED_APPS = [
