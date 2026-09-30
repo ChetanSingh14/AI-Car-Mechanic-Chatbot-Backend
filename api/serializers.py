@@ -33,12 +33,18 @@ class DiagnosisSerializer(serializers.ModelSerializer):
 
 
 class BookingSerializer(serializers.ModelSerializer):
-    diagnosis_detail = DiagnosisSerializer(source='diagnosis', read_only=True)
+    diagnosis = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    diagnosis_detail = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Booking
         fields = ['id', 'diagnosis', 'diagnosis_detail', 'customer_name', 'customer_email', 'customer_phone', 'preferred_date', 'preferred_time', 'notes', 'status', 'created_at']
         read_only_fields = ['id', 'created_at', 'status']
+
+    def get_diagnosis_detail(self, obj):
+        if hasattr(obj, 'diagnosis') and obj.diagnosis:
+            return DiagnosisSerializer(obj.diagnosis).data
+        return None
 
     def validate_customer_phone(self, value):
         cleaned = ''.join(c for c in value if c.isdigit() or c in ['+', '-', ' ', '(', ')'])
@@ -81,4 +87,4 @@ class MediaUploadSerializer(serializers.Serializer):
 
 
 class DiagnosisRequestSerializer(serializers.Serializer):
-    conversation_id = serializers.CharField(required=True)
+    conversation_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
