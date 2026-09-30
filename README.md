@@ -334,9 +334,22 @@ sudo nginx -t
 sudo systemctl restart nginx
 ```
 
+#### 8. Set File System Permissions for Media Uploads
+To allow Nginx (`www-data` user) to read and stream user uploads without `403 Forbidden` errors:
+```bash
+# Allow Nginx to traverse home directory
+sudo chmod 755 /home/ubuntu
+
+# Grant read/write access to media files
+sudo chmod -R 775 /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend/media
+sudo chown -R ubuntu:www-data /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend/media
+sudo systemctl reload nginx
+```
+
 ---
 
 ### Phase 2: Frontend Deployment on Vercel
+
 
 #### 1. Import Repository into Vercel
 1. Log in to [Vercel](https://vercel.com) and click **Add New Project**.
