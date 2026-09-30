@@ -99,6 +99,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Django REST Framework Configuration
 REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'core.exceptions.custom_exception_handler',
+    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'DEFAULT_PERMISSION_CLASSES': [],
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
@@ -114,6 +116,25 @@ REST_FRAMEWORK = {
 # CORS Configuration
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    '*',
+]
+
+# CSRF Trusted Origins (Supports Vercel deployments, localhost, and custom domains)
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.vercel.app',
+    'https://*.ngrok-free.app',
+    'https://*.ngrok.io',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'http://13.234.4.236',
+    'https://13.234.4.236',
+]
+raw_csrf = os.getenv('CSRF_TRUSTED_ORIGINS', '')
+if raw_csrf:
+    CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in raw_csrf.split(',') if origin.strip()])
 
 # OpenAPI / Swagger Config
 SPECTACULAR_SETTINGS = {
@@ -125,3 +146,4 @@ SPECTACULAR_SETTINGS = {
 
 # Gemini AI API Key
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+
