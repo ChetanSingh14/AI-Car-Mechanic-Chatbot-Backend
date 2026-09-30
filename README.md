@@ -187,5 +187,190 @@ backend/
 
 ---
 
+---
+
+## 🚢 Production Deployment Guide
+
+This full-stack application is deployed using **AWS EC2 (Ubuntu 24.04/22.04 LTS)** for the Django REST backend and **Vercel** for the Next.js frontend.
+
+```mermaid
+flowchart LR
+    Browser["🌐 Browser Client\n(HTTPS)"]
+    Vercel["▲ Vercel Edge Server\n(Next.js App & Proxy Route)"]
+    Nginx["🛡️ Nginx Web Server\n(Port 80 / Reverse Proxy)"]
+    Gunicorn["⚙️ Gunicorn WSGI\n(Port 8000 / Unix Socket)"]
+    Django["🐍 Django REST API\n(AI Services & SQLite)"]
+
+    Browser -->|HTTPS| Vercel
+    Vercel -->|HTTP Server-to-Server| Nginx
+    Nginx --> Gunicorn
+    Gunicorn --> Django
+```
+
+---
+
+### Phase 1: AWS EC2 Backend Deployment (Django + Gunicorn + Nginx)
+
+#### 1. Launch EC2 Instance & Security Groups
+* **AMI:** Ubuntu 24.04 LTS or 22.04 LTS
+* **Instance Type:** `t3.micro` or `t2.micro`
+* **Inbound Security Group Rules:**
+  * `SSH` (Port 22) -> Your IP or Anywhere
+  * `HTTP` (Port 80) -> `0.0.0.0/0` (Anywhere)
+  * `HTTPS` (Port 443) -> `0.0.0.0/0` (Anywhere)
+
+#### 2. Connect & Install System Dependencies
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3-pip python3-venv nginx git
+```
+
+#### 3. Clone Repository & Setup Virtual Environment
+```bash
+cd /home/ubuntu
+git clone https://github.com/ChetanSingh14/AI-Car-Mechanic-Chatbot-Backend.git
+cd AI-Car-Mechanic-Chatbot-Backend
+
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt gunicorn
+```
+
+#### 4. Configure Production Environment Variables
+Create the production `.env` file:
+```bash
+nano .env
+```
+Populate with your configuration:
+```env
+DEBUG=False
+SECRET_KEY=your_production_secret_key_here
+ALLOWED_HOSTS=*
+CSRF_TRUSTED_ORIGINS=https://*.vercel.app,http://13.234.4.236
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+Save with `Ctrl + O` -> `Enter` -> `Ctrl + X`.
+
+#### 5. Apply Migrations & Static Files
+```bash
+python3 manage.py migrate
+python3 manage.py collectstatic --noinput
+```
+
+#### 6. Configure Gunicorn Systemd Service
+Create the Gunicorn service daemon:
+```bash
+sudo nano /etc/systemd/system/gunicorn.service
+```
+Paste the following unit configuration:
+```ini
+[Unit]
+Description=Gunicorn daemon for AI Car Mechanic Chatbot
+After=network.target
+
+[Service]
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/AI-Car-Mechanic-Chatbot-Backend
+ExecStart=/home/ubuntu/AI-Car-Mechanic-Chatbot-Backend/venv/bin/gunicorn \
+          --workers 3 \
+          --bind 127.0.0.1:8000 \
+          --access-logfile - \
+          --error-logfile - \
+          core.wsgi:application
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start Gunicorn:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start gunicorn
+sudo systemctl enable gunicorn
+sudo systemctl status gunicorn
+```
+
+#### 7. Configure Nginx as Reverse Proxy
+Create the Nginx server block:
+```bash
+sudo nano /etc/nginx/sites-available/car_mechanic
+```
+Paste the following configuration (replace `13.234.4.236` with your public IP):
+```nginx
+server {
+    listen 80;
+    server_name 13.234.4.236;
+
+    client_max_body_size 50M;
+
+    # Proxy API requests to Gunicorn
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Serve static files directly via Nginx
+    location /static/ {
+        alias /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend/staticfiles/;
+    }
+
+    # Serve media uploads (audio/images/videos)
+    location /media/ {
+        alias /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend/media/;
+    }
+}
+```
+
+Enable the site and restart Nginx:
+```bash
+sudo ln -s /etc/nginx/sites-available/car_mechanic /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+---
+
+### Phase 2: Frontend Deployment on Vercel
+
+#### 1. Import Repository into Vercel
+1. Log in to [Vercel](https://vercel.com) and click **Add New Project**.
+2. Select your `AI-Car-Mechanic-Chatbot-Frontend` repository.
+3. Framework Preset: **Next.js** (detected automatically).
+
+#### 2. Set Environment Variables
+In the **Environment Variables** section:
+* `NEXT_PUBLIC_API_URL`: `/api`
+* `BACKEND_API_URL`: `http://13.234.4.236/api` (your EC2 public IP)
+
+#### 3. Mixed Content & SSL Protection
+Because Vercel runs on `https://` and EC2 IP addresses default to `http://`, the frontend includes built-in Next.js proxy route handlers (`/api/backend/*` and `/media/*`). This routes calls server-to-server, preventing browser Mixed Content blocking while ensuring fast streaming.
+
+#### 4. Deploy
+Click **Deploy**. Your frontend is live with SSL at `https://your-project.vercel.app`.
+
+---
+
+### Phase 3: Continuous Updates & Maintenance
+
+Whenever you push new code to GitHub, update your AWS EC2 server in seconds:
+
+```bash
+cd /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend
+git pull origin main
+source venv/bin/activate
+pip install -r requirements.txt
+python3 manage.py migrate
+sudo systemctl restart gunicorn
+```
+
+---
+
 ## 📄 License
 This project is licensed under the MIT License.
+
