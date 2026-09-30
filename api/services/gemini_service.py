@@ -22,18 +22,17 @@ RULES:
 5. If the user asks for diagnosis or has described full symptoms, provide a clear structured diagnosis summary.
 """
 
+    AVAILABLE_MODELS = [
+        'gemini-flash-lite-latest',  # 15 RPM, 500 Requests/Day
+        'gemini-3.5-flash-lite',     # 15 RPM, 500 Requests/Day
+        'gemini-3.1-flash-lite',     # 15 RPM, 500 Requests/Day
+        'gemini-flash-latest',       # 5 RPM, 20 Requests/Day
+        'gemini-pro-latest'          # High capability fallback
+    ]
+
     @classmethod
     def get_api_key(cls):
         return getattr(settings, 'GEMINI_API_KEY', '') or os.getenv('GEMINI_API_KEY', '')
-
-    @classmethod
-    def _get_generative_model(cls, genai):
-        for model_name in ['gemini-flash-latest', 'gemini-pro-latest', 'gemini-2.5-flash-lite', 'gemini-1.5-flash']:
-            try:
-                return genai.GenerativeModel(model_name)
-            except Exception:
-                continue
-        return genai.GenerativeModel('gemini-flash-latest')
 
     @classmethod
     def generate_chat_response(cls, conversation, user_message_text: str, media_attachments=None):
@@ -56,9 +55,8 @@ RULES:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
-                model = cls._get_generative_model(genai)
-                
-                # Check for images if present
+
+                # Prepare contents
                 contents = [prompt]
                 if media_attachments:
                     for media in media_attachments:
@@ -70,14 +68,22 @@ RULES:
                             except Exception as img_err:
                                 logger.warning(f"Could not load image for Gemini: {img_err}")
 
-                response = model.generate_content(contents)
-                if response and response.text:
-                    return {
-                        "text": response.text,
-                        "is_ai_generated": True
-                    }
+                # Dynamic Model Rotation across highest RPM/RPD models
+                for model_name in cls.AVAILABLE_MODELS:
+                    try:
+                        model = genai.GenerativeModel(model_name)
+                        response = model.generate_content(contents)
+                        if response and response.text:
+                            return {
+                                "text": response.text,
+                                "is_ai_generated": True
+                            }
+                    except Exception as model_err:
+                        logger.warning(f"Gemini model {model_name} rate-limited or unavailable: {model_err}. Rotating...")
+                        continue
+
             except Exception as e:
-                logger.error(f"Gemini API Error: {e}. Falling back to Senior Technician Rule Engine.")
+                logger.error(f"Gemini API initialization error: {e}. Falling back to Senior Technician Rule Engine.")
 
         # Senior Technician Fallback Engine (when API key is missing or failed)
         return {
@@ -112,18 +118,23 @@ JSON format required:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
-                model = cls._get_generative_model(genai)
-                response = model.generate_content(prompt)
-                
-                # Extract JSON from response
-                raw_text = response.text.strip()
-                if "```json" in raw_text:
-                    raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-                elif "```" in raw_text:
-                    raw_text = raw_text.split("```")[1].split("```")[0].strip()
 
-                parsed = json.loads(raw_text)
-                return parsed
+                for model_name in cls.AVAILABLE_MODELS:
+                    try:
+                        model = genai.GenerativeModel(model_name)
+                        response = model.generate_content(prompt)
+                        
+                        raw_text = response.text.strip()
+                        if "```json" in raw_text:
+                            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+                        elif "```" in raw_text:
+                            raw_text = raw_text.split("```")[1].split("```")[0].strip()
+
+                        parsed = json.loads(raw_text)
+                        return parsed
+                    except Exception as diag_err:
+                        logger.warning(f"Diagnosis generation on {model_name} failed: {diag_err}. Rotating...")
+                        continue
             except Exception as e:
                 logger.error(f"Gemini Diagnosis JSON Error: {e}")
 
