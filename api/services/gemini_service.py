@@ -1,7 +1,11 @@
 import os
 import json
 import logging
+import warnings
 from django.conf import settings
+
+# Suppress harmless deprecation/future warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,15 @@ RULES:
     @classmethod
     def get_api_key(cls):
         return getattr(settings, 'GEMINI_API_KEY', '') or os.getenv('GEMINI_API_KEY', '')
+
+    @classmethod
+    def _get_generative_model(cls, genai):
+        for model_name in ['gemini-flash-latest', 'gemini-pro-latest', 'gemini-2.5-flash-lite', 'gemini-1.5-flash']:
+            try:
+                return genai.GenerativeModel(model_name)
+            except Exception:
+                continue
+        return genai.GenerativeModel('gemini-flash-latest')
 
     @classmethod
     def generate_chat_response(cls, conversation, user_message_text: str, media_attachments=None):
@@ -43,7 +56,7 @@ RULES:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = cls._get_generative_model(genai)
                 
                 # Check for images if present
                 contents = [prompt]
@@ -99,7 +112,7 @@ JSON format required:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = cls._get_generative_model(genai)
                 response = model.generate_content(prompt)
                 
                 # Extract JSON from response
