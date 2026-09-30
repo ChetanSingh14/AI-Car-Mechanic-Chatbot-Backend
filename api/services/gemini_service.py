@@ -56,17 +56,23 @@ RULES:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
 
-                # Prepare contents
+                # Prepare multimodal contents
                 contents = [prompt]
                 if media_attachments:
                     for media in media_attachments:
-                        if media.file_type == 'image' and os.path.exists(media.file.path):
-                            try:
+                        if not os.path.exists(media.file.path):
+                            continue
+                        try:
+                            if media.file_type == 'image':
                                 from PIL import Image
                                 img = Image.open(media.file.path)
                                 contents.append(img)
-                            except Exception as img_err:
-                                logger.warning(f"Could not load image for Gemini: {img_err}")
+                            elif media.file_type in ['audio', 'video']:
+                                # Upload audio/video using genai.upload_file for acoustic waveform / video frame analysis
+                                uploaded_media = genai.upload_file(media.file.path)
+                                contents.append(uploaded_media)
+                        except Exception as img_err:
+                            logger.warning(f"Could not load {media.file_type} for Gemini: {img_err}")
 
                 # Dynamic Model Rotation across highest RPM/RPD models
                 for model_name in cls.AVAILABLE_MODELS:
@@ -99,9 +105,10 @@ RULES:
         messages = list(conversation.messages.all())
         user_complaints = [m.content for m in messages if m.sender == 'user']
         complaint_text = " ".join(user_complaints)
+        media_attachments = conversation.media_attachments.all()
 
         prompt = f"""
-You are an expert car mechanic. Analyze this vehicle issue description and output ONLY a JSON object:
+You are an expert car mechanic. Analyze this vehicle issue description and any uploaded media (images/audio/video) to output ONLY a JSON object:
 Vehicle: {car_info}
 Symptoms/History: {complaint_text}
 
@@ -109,7 +116,7 @@ JSON format required:
 {{
   "issue_title": "Short title of issue (e.g., Worn Front Brake Pads & Rotors)",
   "severity": "low|medium|high|critical",
-  "description": "2-3 sentence technical explanation of cause and impact.",
+  "description": "2-3 sentence technical explanation of cause and impact based on symptoms and media analysis.",
   "recommended_service": "Recommended repair action (e.g., Front Brake Pad and Rotor Replacement)",
   "estimated_cost": "$150 - $350"
 }}
@@ -119,10 +126,23 @@ JSON format required:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
 
+                diag_contents = [prompt]
+                if media_attachments:
+                    for media in media_attachments:
+                        if os.path.exists(media.file.path):
+                            try:
+                                if media.file_type == 'image':
+                                    from PIL import Image
+                                    diag_contents.append(Image.open(media.file.path))
+                                elif media.file_type in ['audio', 'video']:
+                                    diag_contents.append(genai.upload_file(media.file.path))
+                            except Exception as m_err:
+                                logger.warning(f"Could not load {media.file_type} for diagnosis: {m_err}")
+
                 for model_name in cls.AVAILABLE_MODELS:
                     try:
                         model = genai.GenerativeModel(model_name)
-                        response = model.generate_content(prompt)
+                        response = model.generate_content(diag_contents)
                         
                         raw_text = response.text.strip()
                         if "```json" in raw_text:
