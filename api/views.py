@@ -12,6 +12,24 @@ from .serializers import (
 from .services import IntentService, GeminiMechanicService, BookingService
 
 
+import uuid
+
+def get_or_create_conversation_safely(conversation_id_str, car_make='', car_model='', car_year=''):
+    if conversation_id_str:
+        try:
+            val_uuid = uuid.UUID(str(conversation_id_str))
+            conv = Conversation.objects.filter(id=val_uuid).first()
+            if conv:
+                return conv
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return Conversation.objects.create(
+        car_make=car_make or '',
+        car_model=car_model or '',
+        car_year=car_year or ''
+    )
+
+
 class ChatView(APIView):
     """
     POST /api/chat/
@@ -30,21 +48,13 @@ class ChatView(APIView):
         conversation_id = data.get('conversation_id')
         user_text = data['message'].strip()
 
-        # Get or create conversation
-        if conversation_id:
-            try:
-                conversation = Conversation.objects.get(id=conversation_id)
-            except Conversation.DoesNotExist:
-                return Response(
-                    {"success": False, "error": {"code": "NOT_FOUND", "message": f"Conversation {conversation_id} not found."}},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        else:
-            conversation = Conversation.objects.create(
-                car_make=data.get('car_make', ''),
-                car_model=data.get('car_model', ''),
-                car_year=data.get('car_year', '')
-            )
+        # Get or create conversation safely
+        conversation = get_or_create_conversation_safely(
+            conversation_id,
+            car_make=data.get('car_make', ''),
+            car_model=data.get('car_model', ''),
+            car_year=data.get('car_year', '')
+        )
 
         # Update vehicle info if provided in request
         if data.get('car_make'):
@@ -116,13 +126,8 @@ class UploadView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        try:
-            conversation = Conversation.objects.get(id=data['conversation_id'])
-        except Conversation.DoesNotExist:
-            return Response(
-                {"success": False, "error": {"code": "NOT_FOUND", "message": "Conversation not found."}},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        conv_id_str = data.get('conversation_id')
+        conversation = get_or_create_conversation_safely(conv_id_str)
 
         uploaded_file = data['file']
         content_type = uploaded_file.content_type.lower() if uploaded_file.content_type else ''
@@ -170,15 +175,9 @@ class DiagnosisView(APIView):
     def post(self, request):
         serializer = DiagnosisRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        conv_id = serializer.validated_data['conversation_id']
+        conv_id_str = serializer.validated_data.get('conversation_id')
 
-        try:
-            conversation = Conversation.objects.get(id=conv_id)
-        except Conversation.DoesNotExist:
-            return Response(
-                {"success": False, "error": {"code": "NOT_FOUND", "message": "Conversation not found."}},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        conversation = get_or_create_conversation_safely(conv_id_str)
 
         diag_data = GeminiMechanicService.generate_diagnosis(conversation)
 

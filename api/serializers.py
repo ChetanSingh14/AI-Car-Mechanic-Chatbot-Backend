@@ -59,15 +59,18 @@ class ConversationSerializer(serializers.ModelSerializer):
 
 
 class ChatRequestSerializer(serializers.Serializer):
-    conversation_id = serializers.UUIDField(required=False, allow_null=True)
+    conversation_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     message = serializers.CharField(required=True, allow_blank=False, max_length=2000)
     car_make = serializers.CharField(required=False, allow_blank=True, max_length=50)
     car_model = serializers.CharField(required=False, allow_blank=True, max_length=50)
     car_year = serializers.CharField(required=False, allow_blank=True, max_length=10)
+    media_attachment_ids = serializers.ListField(
+        child=serializers.CharField(), required=False, allow_empty=True
+    )
 
 
 class MediaUploadSerializer(serializers.Serializer):
-    conversation_id = serializers.UUIDField(required=True)
+    conversation_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     file = serializers.FileField(required=True)
 
     def validate_file(self, value):
@@ -78,4 +81,4 @@ class MediaUploadSerializer(serializers.Serializer):
 
 
 class DiagnosisRequestSerializer(serializers.Serializer):
-    conversation_id = serializers.UUIDField(required=True)
+    conversation_id = serializers.CharField(required=True)
