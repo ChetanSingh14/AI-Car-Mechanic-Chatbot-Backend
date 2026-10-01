@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import logging
 import warnings
 from django.conf import settings
@@ -27,85 +28,16 @@ DIAGNOSTIC GUIDELINES:
     def get_models(cls):
         raw = os.getenv('GEMINI_MODELS', '')
         if raw:
-            return [m.strip() for m in raw.split(',') if m.strip()]
+            models = [m.strip() for m in raw.split(',') if m.strip()]
+            return models[:2]
         return [
             'gemini-2.5-flash',
-            'gemini-2.5-flash-lite',
-            'gemini-flash-latest'
+            'gemini-2.5-flash-lite'
         ]
 
     @classmethod
     def get_api_key(cls):
         return getattr(settings, 'GEMINI_API_KEY', '') or os.getenv('GEMINI_API_KEY', '')
-
-    @classmethod
-    def get_grok_api_key(cls):
-        return (
-            getattr(settings, 'GROK_API_KEY', '') or
-            os.getenv('GROK_API_KEY', '') or
-            getattr(settings, 'XAI_API_KEY', '') or
-            os.getenv('XAI_API_KEY', '')
-        )
-
-    @classmethod
-    def get_grok_models(cls):
-        raw = os.getenv('GROK_MODELS', '')
-        if raw:
-            return [m.strip() for m in raw.split(',') if m.strip()]
-        return ['grok-2-latest', 'grok-2', 'grok-beta']
-
-    @classmethod
-    def _call_grok_completion(cls, system_prompt: str, user_prompt: str, json_mode: bool = False):
-        """
-        Secondary AI Fallback using xAI Grok API when Gemini quota/limits are reached or unavailable.
-        Uses OpenAI-compatible chat completions endpoint: https://api.x.ai/v1/chat/completions
-        """
-        api_key = cls.get_grok_api_key()
-        if not api_key:
-            return None
-
-        try:
-            import requests
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-            for model_name in cls.get_grok_models():
-                payload = {
-                    "model": model_name,
-                    "messages": messages,
-                    "temperature": 0.2
-                }
-                if json_mode:
-                    payload["response_format"] = {"type": "json_object"}
-
-                try:
-                    resp = requests.post(
-                        "https://api.x.ai/v1/chat/completions",
-                        headers=headers,
-                        json=payload,
-                        timeout=15
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        choices = data.get("choices", [])
-                        if choices and "message" in choices[0] and choices[0]["message"].get("content"):
-                            content = choices[0]["message"]["content"].strip()
-                            logger.info(f"Successfully generated AI response via Grok model {model_name}")
-                            return content
-                    else:
-                        logger.warning(f"Grok model {model_name} HTTP {resp.status_code}: {resp.text[:150]}")
-                except Exception as model_err:
-                    logger.warning(f"Grok model {model_name} connection error: {model_err}")
-                    continue
-        except Exception as e:
-            logger.warning(f"Could not execute Grok API completion: {e}")
-
-        return None
 
     @classmethod
     def analyze_media_file_once(cls, media_attachment):
@@ -141,18 +73,18 @@ DIAGNOSTIC GUIDELINES:
                     contents = [prompt, uploaded_file]
 
                 if contents:
-                    for model_name in cls.get_models():
-                        try:
-                            model = genai.GenerativeModel(model_name)
-                            res = model.generate_content(contents)
-                            if res and res.text:
-                                summary = res.text.strip()
-                                media_attachment.analysis_summary = summary
-                                media_attachment.save(update_fields=['analysis_summary'])
-                                return summary
-                        except Exception as model_err:
-                            logger.warning(f"Media analysis with {model_name} failed: {model_err}")
-                            continue
+                    models = cls.get_models()
+                    model_name = models[0] if models else 'gemini-2.5-flash'
+                    try:
+                        model = genai.GenerativeModel(model_name)
+                        res = model.generate_content(contents, request_options={"timeout": 10})
+                        if res and res.text:
+                            summary = res.text.strip()
+                            media_attachment.analysis_summary = summary
+                            media_attachment.save(update_fields=['analysis_summary'])
+                            return summary
+                    except Exception as model_err:
+                        logger.warning(f"Media analysis with {model_name} failed: {model_err}")
             except Exception as e:
                 logger.warning(f"Could not perform single-pass media analysis with Gemini: {e}")
 
@@ -192,38 +124,44 @@ DIAGNOSTIC GUIDELINES:
         )
 
         if api_key:
+            start_time = time.monotonic()
+            MAX_AI_BUDGET_SECONDS = 15
+
             try:
                 import google.generativeai as genai
+                from google.api_core import exceptions as google_exceptions
                 genai.configure(api_key=api_key)
 
-                # Dynamic Model Rotation from configurable list
+                # Dynamic Model Rotation: try at most 2 active models within strict time budget
                 for model_name in cls.get_models():
+                    # Stop rotating if overall time budget exceeded
+                    if time.monotonic() - start_time > MAX_AI_BUDGET_SECONDS:
+                        logger.warning("Gemini AI time budget exceeded (15s); halting rotation.")
+                        break
+
                     try:
                         model = genai.GenerativeModel(model_name)
-                        response = model.generate_content([prompt])
+                        response = model.generate_content([prompt], request_options={"timeout": 12})
                         if response and response.text:
                             return {
                                 "text": response.text.strip(),
                                 "is_ai_generated": True
                             }
-                    except Exception as model_err:
-                        logger.warning(f"Gemini model {model_name} unavailable: {model_err}. Rotating...")
+                    except google_exceptions.NotFound:
+                        # 404: specific model not found on this API version; try alternate model
+                        logger.warning(f"Gemini model {model_name} not found (404). Rotating to next model...")
                         continue
+                    except Exception as model_err:
+                        # On timeout, quota (429), or network error: stop rotating immediately to prevent cascading 504s!
+                        err_str = str(model_err).lower()
+                        if "404" in err_str or "not found" in err_str:
+                            logger.warning(f"Gemini model {model_name} not found. Rotating...")
+                            continue
+                        logger.warning(f"Gemini model {model_name} failed ({type(model_err).__name__}: {model_err}). Halting rotation to avoid timeout.")
+                        break
 
             except Exception as e:
-                logger.error(f"Gemini API error: {e}. Checking Grok fallback...")
-
-        # Secondary AI Fallback: xAI Grok API
-        grok_response = cls._call_grok_completion(
-            system_prompt=cls.SYSTEM_PROMPT,
-            user_prompt=prompt,
-            json_mode=False
-        )
-        if grok_response:
-            return {
-                "text": grok_response,
-                "is_ai_generated": True
-            }
+                logger.error(f"Gemini API error: {e}. Falling back to rule engine.")
 
         # Senior Technician Fallback Engine (Rules)
         return {
@@ -234,7 +172,7 @@ DIAGNOSTIC GUIDELINES:
     @classmethod
     def generate_diagnosis(cls, conversation):
         """
-        Generate structured JSON diagnosis using Gemini, Grok fallback, or the expert rule matrix.
+        Generate structured JSON diagnosis using Gemini, or the expert rule matrix.
         Returns: (diag_dict, is_ai_generated)
         """
         api_key = cls.get_api_key()
@@ -264,14 +202,22 @@ JSON format required (no extra markdown outside of json):
 }}
 """
         if api_key:
+            start_time = time.monotonic()
+            MAX_AI_BUDGET_SECONDS = 15
+
             try:
                 import google.generativeai as genai
+                from google.api_core import exceptions as google_exceptions
                 genai.configure(api_key=api_key)
 
                 for model_name in cls.get_models():
+                    if time.monotonic() - start_time > MAX_AI_BUDGET_SECONDS:
+                        logger.warning("Gemini diagnosis time budget exceeded (15s); halting rotation.")
+                        break
+
                     try:
                         model = genai.GenerativeModel(model_name)
-                        response = model.generate_content([prompt])
+                        response = model.generate_content([prompt], request_options={"timeout": 12})
                         if response and response.text:
                             raw_text = response.text.strip()
                             if "```json" in raw_text:
@@ -282,30 +228,18 @@ JSON format required (no extra markdown outside of json):
                             parsed = json.loads(raw_text)
                             if 'issue_title' in parsed and 'recommended_service' in parsed:
                                 return parsed, True
-                    except Exception as diag_err:
-                        logger.warning(f"Diagnosis generation on {model_name} failed: {diag_err}. Rotating...")
+                    except google_exceptions.NotFound:
+                        logger.warning(f"Gemini model {model_name} not found (404). Rotating...")
                         continue
+                    except Exception as diag_err:
+                        err_str = str(diag_err).lower()
+                        if "404" in err_str or "not found" in err_str:
+                            logger.warning(f"Gemini model {model_name} not found. Rotating...")
+                            continue
+                        logger.warning(f"Diagnosis generation on {model_name} failed ({type(diag_err).__name__}: {diag_err}). Halting rotation.")
+                        break
             except Exception as e:
-                logger.error(f"Gemini Diagnosis JSON Error: {e}. Checking Grok fallback...")
-
-        # Secondary AI Fallback: Grok (xAI) API for structured JSON diagnosis
-        grok_diag = cls._call_grok_completion(
-            system_prompt="You are an expert ASE Master Automotive Diagnostic Technician. Output ONLY a valid JSON object matching the requested schema.",
-            user_prompt=prompt,
-            json_mode=True
-        )
-        if grok_diag:
-            try:
-                raw_text = grok_diag.strip()
-                if "```json" in raw_text:
-                    raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-                elif "```" in raw_text:
-                    raw_text = raw_text.split("```")[1].split("```")[0].strip()
-                parsed = json.loads(raw_text)
-                if 'issue_title' in parsed and 'recommended_service' in parsed:
-                    return parsed, True
-            except Exception as parse_err:
-                logger.warning(f"Could not parse Grok JSON diagnosis: {parse_err}")
+                logger.error(f"Gemini Diagnosis JSON Error: {e}. Falling back to rule matrix.")
 
         # Fallback Diagnostic Matrix based on keyword matching
         return cls._fallback_diagnosis_matrix(complaint_text, car_info), False

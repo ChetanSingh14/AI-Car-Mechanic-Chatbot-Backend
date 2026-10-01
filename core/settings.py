@@ -23,7 +23,7 @@ if raw_hosts:
 elif DEBUG:
     ALLOWED_HOSTS = ['*']
 else:
-    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '13.234.4.236', 'testserver']
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
 # Installed Apps
 INSTALLED_APPS = [
@@ -138,7 +138,10 @@ DEFAULT_CORS_ORIGINS = [
     'http://127.0.0.1:3000',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'https://*.vercel.app',
+]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
 ]
 
 raw_cors = os.getenv('CORS_ALLOWED_ORIGINS', '')
@@ -195,6 +198,5 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
-# AI API Keys & Configuration
+# AI API Keys & Configuration (Google Gemini Free Tier)
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-GROK_API_KEY = os.getenv('GROK_API_KEY', '') or os.getenv('XAI_API_KEY', '')

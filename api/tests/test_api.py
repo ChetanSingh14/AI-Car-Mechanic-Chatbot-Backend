@@ -15,12 +15,9 @@ class CarMechanicAPITestCase(TestCase):
         self.client = APIClient()
         self.api_key_patcher = patch('api.services.gemini_service.GeminiMechanicService.get_api_key', return_value='')
         self.api_key_patcher.start()
-        self.grok_key_patcher = patch('api.services.gemini_service.GeminiMechanicService.get_grok_api_key', return_value='')
-        self.grok_key_patcher.start()
 
     def tearDown(self):
         self.api_key_patcher.stop()
-        self.grok_key_patcher.stop()
 
     def test_health_check_endpoint(self):
         """Test GET /api/health/ returns 200 OK and healthy status."""
@@ -491,16 +488,47 @@ class CarMechanicAPITestCase(TestCase):
         self.assertIn("Random or Multiple Cylinder Misfire", content)
         self.assertIn("Probable Root Causes", content)
 
-    @patch('api.services.gemini_service.GeminiMechanicService._call_grok_completion')
-    def test_grok_ai_fallback_on_gemini_unavailable(self, mock_grok):
-        """Test that when Gemini API is unavailable, system cascades to Grok AI fallback."""
-        mock_grok.return_value = "Grok Diagnostic Analysis: Spark plug fouling detected on cylinder 3."
+    def test_gemini_failure_or_timeout_falls_back_to_rules_gracefully(self):
+        """Test that when Gemini API times out or raises an error, system halts rotation and falls back to rules."""
         conv = Conversation.objects.create(car_make="Ford", car_model="Focus", car_year="2018")
         
-        # When Gemini has no key, it falls through to Grok
-        ai_res = GeminiMechanicService.generate_chat_response(conv, "Engine running rough with hesitation on acceleration")
-        self.assertTrue(ai_res['is_ai_generated'])
-        self.assertEqual(ai_res['text'], "Grok Diagnostic Analysis: Spark plug fouling detected on cylinder 3.")
-        mock_grok.assert_called_once()
+        # When Gemini has no key (or throws an error), it falls through to ASE technician rules
+        res = GeminiMechanicService.generate_chat_response(conv, "Engine running rough with hesitation on acceleration")
+        self.assertFalse(res['is_ai_generated'])
+        self.assertIn("Automobile Technician", res['text'])
+
+    def test_booking_detail_enforces_strict_client_token_privacy(self):
+        """Test GET /api/booking/{id}/ returns 404 for unauthenticated or wrong token, and 200 for matching token."""
+        conv = Conversation.objects.create(client_token="secured_owner_token_999")
+        diag = Diagnosis.objects.create(
+            conversation=conv,
+            issue_title="Brake Master Cylinder",
+            severity="critical",
+            description="Leaking master cylinder",
+            recommended_service="Brake Master Cylinder Replacement",
+            estimated_cost="$300 - $600"
+        )
+        booking = Booking.objects.create(
+            diagnosis=diag,
+            customer_name="Secret Customer",
+            customer_email="secret@example.com",
+            customer_phone="+15559876543",
+            preferred_date=timezone.now().date() + datetime.timedelta(days=3),
+            preferred_time="11:00 AM",
+            status="pending"
+        )
+
+        # 1. Without X-Client-Token -> 404 (Privacy protected)
+        res_no_token = self.client.get(f'/api/booking/{booking.id}/')
+        self.assertEqual(res_no_token.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 2. With wrong X-Client-Token -> 404 (Privacy protected)
+        res_wrong_token = self.client.get(f'/api/booking/{booking.id}/', HTTP_X_CLIENT_TOKEN="attacker_token")
+        self.assertEqual(res_wrong_token.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 3. With matching X-Client-Token -> 200 (Authorized)
+        res_correct = self.client.get(f'/api/booking/{booking.id}/', HTTP_X_CLIENT_TOKEN="secured_owner_token_999")
+        self.assertEqual(res_correct.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_correct.json()['data']['customer_name'], "Secret Customer")
 
 

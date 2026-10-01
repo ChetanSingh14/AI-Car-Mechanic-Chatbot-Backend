@@ -18,12 +18,13 @@ A **Django REST Framework** backend service powering an AI-assisted Automotive D
 
 * **Framework:** Python 3.10+ / Django 4.2+ / Django REST Framework
 * **AI Engine:** Google Generative AI Multimodal SDK (`google-generativeai`)
-  * **Supported Models (Configurable via `GEMINI_MODELS`):** `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-flash-latest`
-  * **Fallback Layer:** xAI Grok API (`grok-2-latest`) + Offline Deterministic Automotive Rule Matrix (`is_ai_generated: false`)
-* **Media Processing:** Pillow (`PIL.Image`) for vision tensors and `genai.upload_file` for native audio waveforms and video streams (4 MB limit)
+  * **Supported Models (Configurable via `GEMINI_MODELS`):** `gemini-2.5-flash`, `gemini-2.5-flash-lite`
+  * **Timeout & Budget:** 12-second per-call timeout with a strict 15-second total budget and fast failover (halts rotation on timeout or network/quota error)
+  * **Fallback Layer:** Offline Deterministic Automotive Rule Matrix (`is_ai_generated: false`)
+* **Media Processing:** Pillow (`PIL.Image`) for vision tensors and `genai.upload_file` for native audio waveforms and video streams (4 MB limit, on-demand analysis)
 * **API Documentation:** `drf-spectacular` (OpenAPI 3.0 & Swagger UI at `/api/docs/`)
 * **Database:** SQLite (default development database, PostgreSQL compatible)
-* **Testing:** Django Test Suite (`28/28 tests passing`)
+* **Testing:** Django Test Suite (`29/29 tests passing`)
 
 ---
 
@@ -35,11 +36,11 @@ To optimize response latency, eliminate unnecessary token expenditures, and guar
 | :--- | :--- | :--- | :--- |
 | **Off-Topic / Non-Automotive Chat** | `IntentService` (Rules) | **0 Tokens** | Evaluates keywords and regex patterns in `<1ms`. Rejects non-automotive queries (e.g. general chat, recipes, coding) without calling external AI. |
 | **Known OBD-II Trouble Codes** | Rule Matrix / Knowledge Base | **0 Tokens** | Direct OBD-II code lookups (`P0300`, `P0420`, `P0171`, etc.) return structured technical definitions, root causes, and inspection procedures immediately without AI consumption. |
-| **Automotive Diagnostic Chat** | Gemini Multimodal AI / Grok AI | Active Quota | Context-aware diagnostic conversation incorporating vehicle make, model, year, and reported symptoms. Returns `is_ai_generated: true`. |
+| **Automotive Diagnostic Chat** | Gemini Multimodal AI | Active Quota | Context-aware diagnostic conversation incorporating vehicle make, model, year, and reported symptoms. Returns `is_ai_generated: true`. |
 | **Audio Acoustic Analysis** | Gemini Multimodal AI | Active Quota | Ingests recorded audio (knocking, squeal, rattle) to analyze frequency profile and mechanical friction wear. |
 | **Image & Video Inspection** | Gemini Multimodal Vision | Active Quota | Inspects photos and video clips (exhaust smoke, belt wobble, fluid leaks, dashboard lights). |
-| **Diagnostic Report Generation** | Gemini Structured AI / Grok AI | Active Quota | Synthesizes chat history, vehicle specs, and media findings into a structured diagnosis with severity, recommended service, and estimated repair cost ranges. |
-| **Multi-Tier AI & Offline Fallback** | Grok AI -> Deterministic Engine | **0 Tokens (Rules)** | When `GEMINI_API_KEY` hits rate limits or errors, the server cascades to Grok (`GROK_API_KEY`). If AI services are offline, it responds with an honest structured rule-based message (`is_ai_generated: false`), leaves media analysis pending for retry, and prompts the user to describe what they see/hear. |
+| **Diagnostic Report Generation** | Gemini Structured AI | Active Quota | Synthesizes chat history, vehicle specs, and media findings into a structured diagnosis with severity, recommended service, and estimated repair cost ranges. |
+| **Offline & Quota Fallback** | Deterministic Rule Matrix | **0 Tokens (Rules)** | When `GEMINI_API_KEY` is not provided, times out (12s limit), or encounters network/rate limits, the server halts rotation immediately and responds with an honest structured rule-based message (`is_ai_generated: false`), leaves media analysis pending for retry, and prompts the user to describe what they see/hear. |
 | **Session & Booking Operations** | DRF ORM / Database | **0 Tokens** | Session creation, listing, deleting, client-token isolation (`X-Client-Token`), booking reservations, and status retrieval run purely on the database. |
 
 ---
@@ -53,7 +54,7 @@ To optimize response latency, eliminate unnecessary token expenditures, and guar
 * 📋 **Diagnostic Summary & Cost Report (`POST /api/diagnosis/`):** Categorizes issues with standardized severity ratings (*Low*, *Medium*, *High*, *Critical*), recommended repairs, and realistic repair cost ranges. Uses caching based on `updated_at`.
 * 📅 **Mechanic Appointment Booking (`POST /api/booking/`):** Session-based guest booking tied to diagnostic records with status tracking.
 * 🔒 **Privacy & Client Isolation:** Client browser token (`X-Client-Token`) isolates conversations and booking records per user session with 404 access control on mismatched or missing tokens.
-* 🛡️ **Multi-Tier AI Failover (Gemini -> Grok -> Rule Matrix):** Rotates across active Gemini models (`gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-flash-latest`), cascades to xAI Grok if quota is exhausted, and cleanly falls back to the deterministic Senior Technician Rule Matrix.
+* 🛡️ **Graceful AI Failover & Strict Timeout Budget:** 12-second timeout per Gemini call with a 15-second total budget (staying well below frontend's 30s abort and Nginx's 60s timeout). Halts rotation on timeouts/quota errors and cleanly falls back to the deterministic Senior Technician Rule Matrix (`is_ai_generated: false`).
 
 ---
 
@@ -96,23 +97,12 @@ SECRET_KEY=your_django_secret_key_here
 ALLOWED_HOSTS=localhost,127.0.0.1
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
-# Primary Multimodal AI (Google Gemini)
+# Primary Multimodal AI (Google Gemini Free Tier)
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODELS=gemini-2.5-flash,gemini-2.5-flash-lite,gemini-flash-latest
-
-# Secondary AI Fallback (xAI Grok API)
-GROK_API_KEY=your_grok_key_here
-GROK_MODELS=grok-2-latest,grok-2,grok-beta
+GEMINI_MODELS=gemini-2.5-flash,gemini-2.5-flash-lite
 ```
 
-#### 🔑 Steps to Add Grok (xAI) Fallback API Key:
-1. Visit the [xAI Console](https://console.x.ai/) and create an account.
-2. Go to **API Keys** and generate a new secret API key.
-3. Add the key to your backend `.env` file:
-   ```env
-   GROK_API_KEY=xai-your-generated-api-key-here
-   ```
-4. *How it works:* If Google Gemini reaches free-tier rate limits (429 quota exhaustion) or experiences network timeouts, the backend automatically cascades diagnostic inquiries to Grok (`grok-2-latest`). If both AI keys are exhausted or offline, it safely defaults to the zero-token Senior Technician Rule Matrix.
+4. *How it works:* The backend queries Google Gemini free-tier models (`gemini-2.5-flash`, `gemini-2.5-flash-lite`). If Gemini times out (>12s), encounters network issues, or hits free-tier rate limits (429), it immediately falls back to the zero-token Senior Technician Rule Matrix in `<1ms`, returning honest rule-based answers (`is_ai_generated: false`) without hanging.
 
 ### 5. Apply Database Migrations
 ```bash
@@ -293,8 +283,7 @@ SECRET_KEY=your_production_secret_key_here
 ALLOWED_HOSTS=13.234.4.236,localhost,127.0.0.1
 CSRF_TRUSTED_ORIGINS=https://*.vercel.app,http://<your-ec2-ip-or-domain>
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODELS=gemini-2.5-flash,gemini-2.5-flash-lite,gemini-flash-latest
-# GROK_API_KEY=xai-your-key-here
+GEMINI_MODELS=gemini-2.5-flash,gemini-2.5-flash-lite
 ```
 
 #### 5. Apply Migrations & Static Files

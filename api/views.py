@@ -381,10 +381,7 @@ class UploadView(APIView):
             analysis_summary=None
         )
 
-        # Single-pass media analysis (cached so files aren't re-uploaded every turn)
-        GeminiMechanicService.analyze_media_file_once(media)
-
-        # Also register a system note in chat history
+        # Note: Media inspection is evaluated on-demand during chat/diagnosis to keep upload latency < 10ms
         Message.objects.create(
             conversation=conversation,
             sender='system',
@@ -728,7 +725,7 @@ class BookingDetailView(APIView):
             )
 
         # Privacy check: if conversation has a client_token, verify match
-        if booking.diagnosis.conversation.client_token and client_token and booking.diagnosis.conversation.client_token != client_token:
+        if booking.diagnosis.conversation.client_token and booking.diagnosis.conversation.client_token != client_token:
             return Response(
                 {"success": False, "error": {"code": "NOT_FOUND", "message": f"Booking {pk} not found."}},
                 status=status.HTTP_404_NOT_FOUND
