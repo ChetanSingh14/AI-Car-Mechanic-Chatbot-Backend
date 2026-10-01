@@ -10,7 +10,11 @@ class IntentService:
         'injector', 'turbo', 'turbocharger', 'manifold', 'catalytic', 'converter', 'squeal',
         'grinding', 'knocking', 'rattle', 'smoke', 'leak', 'leaking', 'overheating', 'misfire',
         'vibration', 'dashboard', 'powertrain', 'drivetrain', 'chassis', 'rotor', 'caliper',
-        'sparkplugs', 'mileage', 'odometer', 'accelerator', 'rpm', 'headlight', 'tailgate'
+        'sparkplugs', 'mileage', 'odometer', 'accelerator', 'rpm', 'headlight', 'tailgate',
+        'accident', 'crash', 'collision', 'damage', 'damaged', 'dent', 'dented',
+        'scratch', 'bumper', 'fender', 'hood', 'windshield', 'airbag', 'frame',
+        'bodywork', 'paint', 'hit', 'smashed', 'wreck', 'wrecked', 'repair',
+        'repairs', 'fix', 'broken', 'inspect', 'inspection', 'check'
     }
 
     # Car multi-word phrases to match against full lowercase text
@@ -19,7 +23,9 @@ class IntentService:
         'oil change', 'timing belt', 'warning light', 'flat tire', 'won\'t start',
         'wont start', 'rough idle', 'hard start', 'black smoke', 'white smoke',
         'blue smoke', 'coolant leak', 'oil leak', 'power steering', 'air conditioning',
-        'ac cold', 'ac warm', 'bad mileage', 'burning smell'
+        'ac cold', 'ac warm', 'bad mileage', 'burning smell',
+        'check this', 'look at this', 'see this', 'what happened', 'car accident',
+        'front damage', 'rear damage', 'body damage', 'repair cost'
     ]
 
     # Popular car makes (with word-boundary matching)
@@ -226,6 +232,14 @@ class IntentService:
             }
         """
         text_lower = message_text.lower().strip()
+
+        # Check if conversation has uploaded media attachments
+        has_media = False
+        try:
+            if conversation and hasattr(conversation, 'media_attachments'):
+                has_media = conversation.media_attachments.exists()
+        except Exception:
+            has_media = False
         words = set(re.findall(r'\b\w+\b', text_lower))
 
         # Check OBD-II code detection
@@ -262,7 +276,7 @@ class IntentService:
             extracted['symptom_category'] = symptom_cat
 
         # 1. Direct off-topic rejection rule
-        if total_off_topic_signals > 0 and total_car_signals == 0:
+        if total_off_topic_signals > 0 and total_car_signals == 0 and not has_media:
             return {
                 "action": "REJECT",
                 "response_text": (
@@ -276,7 +290,7 @@ class IntentService:
 
         # 2. Standalone greetings check
         is_greeting_phrase = any(g == text_lower or text_lower.startswith(g + ' ') for g in cls.GREETINGS)
-        if is_greeting_phrase and total_car_signals == 0:
+        if is_greeting_phrase and total_car_signals == 0 and not has_media:
             return {
                 "action": "FOLLOWUP",
                 "response_text": (
@@ -288,7 +302,7 @@ class IntentService:
             }
 
         # 3. Completely unrelated query check
-        if total_car_signals == 0 and not conversation.car_make:
+        if total_car_signals == 0 and not conversation.car_make and not has_media:
             return {
                 "action": "REJECT",
                 "response_text": (
@@ -345,6 +359,7 @@ class IntentService:
     @classmethod
     def _detect_symptom_category(cls, text_lower: str) -> str:
         categories = {
+            'bodywork': ['accident', 'crash', 'collision', 'damage', 'bumper', 'dent', 'fender', 'hood', 'windshield', 'scratch', 'body', 'frame'],
             'brakes': ['brake', 'brakes', 'rotor', 'caliper', 'squeal', 'grinding', 'stopping', 'pad'],
             'engine': ['engine', 'misfire', 'cylinder', 'spark plug', 'timing', 'rpm', 'rough idle', 'stalling', 'knock'],
             'cooling': ['coolant', 'radiator', 'overheating', 'thermostat', 'antifreeze', 'water pump', 'steam'],

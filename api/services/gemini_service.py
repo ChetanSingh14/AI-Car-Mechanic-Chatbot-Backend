@@ -24,16 +24,27 @@ DIAGNOSTIC GUIDELINES:
 6. When media analysis summaries are provided, incorporate acoustic/visual observations into your explanation.
 """
 
+    DEFAULT_MODELS = [
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite',
+        'gemini-flash-lite-latest',
+        'gemini-3.8-flash',
+        'gemini-3.6-flash',
+        'gemini-3.7-flash',
+        'gemini-flash-latest',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite'
+    ]
+
     @classmethod
     def get_models(cls):
         raw = os.getenv('GEMINI_MODELS', '')
         if raw:
             models = [m.strip() for m in raw.split(',') if m.strip()]
-            return models[:2]
-        return [
-            'gemini-2.5-flash',
-            'gemini-2.5-flash-lite'
-        ]
+            if models:
+                return models
+        return cls.DEFAULT_MODELS
 
     @classmethod
     def get_api_key(cls):
@@ -73,18 +84,18 @@ DIAGNOSTIC GUIDELINES:
                     contents = [prompt, uploaded_file]
 
                 if contents:
-                    models = cls.get_models()
-                    model_name = models[0] if models else 'gemini-2.5-flash'
-                    try:
-                        model = genai.GenerativeModel(model_name)
-                        res = model.generate_content(contents, request_options={"timeout": 10})
-                        if res and res.text:
-                            summary = res.text.strip()
-                            media_attachment.analysis_summary = summary
-                            media_attachment.save(update_fields=['analysis_summary'])
-                            return summary
-                    except Exception as model_err:
-                        logger.warning(f"Media analysis with {model_name} failed: {model_err}")
+                    for model_name in cls.get_models():
+                        try:
+                            model = genai.GenerativeModel(model_name)
+                            res = model.generate_content(contents, request_options={"timeout": 12})
+                            if res and res.text:
+                                summary = res.text.strip()
+                                media_attachment.analysis_summary = summary
+                                media_attachment.save(update_fields=['analysis_summary'])
+                                return summary
+                        except Exception as model_err:
+                            logger.warning(f"Media analysis with {model_name} failed: {model_err}. Rotating to next model...")
+                            continue
             except Exception as e:
                 logger.warning(f"Could not perform single-pass media analysis with Gemini: {e}")
 
@@ -125,40 +136,29 @@ DIAGNOSTIC GUIDELINES:
 
         if api_key:
             start_time = time.monotonic()
-            MAX_AI_BUDGET_SECONDS = 15
+            MAX_AI_BUDGET_SECONDS = 30
 
             try:
                 import google.generativeai as genai
-                from google.api_core import exceptions as google_exceptions
                 genai.configure(api_key=api_key)
 
-                # Dynamic Model Rotation: try at most 2 active models within strict time budget
+                # Dynamic Model Fallback Rotation: automatically fallback to next model if down/quota exhausted
                 for model_name in cls.get_models():
-                    # Stop rotating if overall time budget exceeded
                     if time.monotonic() - start_time > MAX_AI_BUDGET_SECONDS:
-                        logger.warning("Gemini AI time budget exceeded (15s); halting rotation.")
+                        logger.warning("Gemini AI time budget exceeded (30s); halting rotation.")
                         break
 
                     try:
                         model = genai.GenerativeModel(model_name)
-                        response = model.generate_content([prompt], request_options={"timeout": 12})
+                        response = model.generate_content([prompt], request_options={"timeout": 10})
                         if response and response.text:
                             return {
                                 "text": response.text.strip(),
                                 "is_ai_generated": True
                             }
-                    except google_exceptions.NotFound:
-                        # 404: specific model not found on this API version; try alternate model
-                        logger.warning(f"Gemini model {model_name} not found (404). Rotating to next model...")
-                        continue
                     except Exception as model_err:
-                        # On timeout, quota (429), or network error: stop rotating immediately to prevent cascading 504s!
-                        err_str = str(model_err).lower()
-                        if "404" in err_str or "not found" in err_str:
-                            logger.warning(f"Gemini model {model_name} not found. Rotating...")
-                            continue
-                        logger.warning(f"Gemini model {model_name} failed ({type(model_err).__name__}: {model_err}). Halting rotation to avoid timeout.")
-                        break
+                        logger.warning(f"Gemini model {model_name} failed ({type(model_err).__name__}: {model_err}). Rotating to next model in chain...")
+                        continue
 
             except Exception as e:
                 logger.error(f"Gemini API error: {e}. Falling back to rule engine.")
@@ -203,21 +203,20 @@ JSON format required (no extra markdown outside of json):
 """
         if api_key:
             start_time = time.monotonic()
-            MAX_AI_BUDGET_SECONDS = 15
+            MAX_AI_BUDGET_SECONDS = 30
 
             try:
                 import google.generativeai as genai
-                from google.api_core import exceptions as google_exceptions
                 genai.configure(api_key=api_key)
 
                 for model_name in cls.get_models():
                     if time.monotonic() - start_time > MAX_AI_BUDGET_SECONDS:
-                        logger.warning("Gemini diagnosis time budget exceeded (15s); halting rotation.")
+                        logger.warning("Gemini diagnosis time budget exceeded (30s); halting rotation.")
                         break
 
                     try:
                         model = genai.GenerativeModel(model_name)
-                        response = model.generate_content([prompt], request_options={"timeout": 12})
+                        response = model.generate_content([prompt], request_options={"timeout": 10})
                         if response and response.text:
                             raw_text = response.text.strip()
                             if "```json" in raw_text:
@@ -228,16 +227,9 @@ JSON format required (no extra markdown outside of json):
                             parsed = json.loads(raw_text)
                             if 'issue_title' in parsed and 'recommended_service' in parsed:
                                 return parsed, True
-                    except google_exceptions.NotFound:
-                        logger.warning(f"Gemini model {model_name} not found (404). Rotating...")
-                        continue
                     except Exception as diag_err:
-                        err_str = str(diag_err).lower()
-                        if "404" in err_str or "not found" in err_str:
-                            logger.warning(f"Gemini model {model_name} not found. Rotating...")
-                            continue
-                        logger.warning(f"Diagnosis generation on {model_name} failed ({type(diag_err).__name__}: {diag_err}). Halting rotation.")
-                        break
+                        logger.warning(f"Diagnosis generation on {model_name} failed ({type(diag_err).__name__}: {diag_err}). Rotating to next model in chain...")
+                        continue
             except Exception as e:
                 logger.error(f"Gemini Diagnosis JSON Error: {e}. Falling back to rule matrix.")
 
@@ -280,6 +272,18 @@ JSON format required (no extra markdown outside of json):
                 f"Frequent triggers include:\n- Oxygen (O2) Sensor failure\n- Loose or faulty Gas Cap\n- Mass Air Flow (MAF) Sensor fouling\n- Misfires (Spark Plugs or Ignition Coils)\n\n"
                 f"Next Step: Scan the OBD-II port for specific codes (P0300, P0420, etc.) to confirm exact component failure.{media_note}"
             )
+        elif any(w in q_lower for w in ['accident', 'crash', 'collision', 'damage', 'dent', 'bumper', 'fender', 'hood', 'wreck']):
+            return (
+                f"Based on the visual collision and body damage reported for your {car_info or 'vehicle'}, "
+                f"front-end impact typically involves structural, cooling, and alignment components beyond visible body panels.\n\n"
+                f"Critical Collision Inspection Checklist:\n"
+                f"1. Structural Core & Radiator Support: Check radiator, A/C condenser, and transmission cooler for cracks or fluid leaks.\n"
+                f"2. Steering & Suspension Alignment: Inspect control arms, tie rods, wheel arch liners, and strut towers for bending.\n"
+                f"3. Frame Rail & Crumple Zone Integrity: Verify front bumper reinforcement bar and subframe mounting alignment.\n"
+                f"4. Sensor & Wiring Harnesses: Inspect frontal radar sensors, airbag impact sensors, and headlight harness continuity.\n\n"
+                f"Safety Notice: Driving a vehicle with front-end collision damage carries severe risks of overheating, sudden fluid loss, and steering failure. "
+                f"I strongly advise having the vehicle towed to a certified collision and mechanical repair facility.{media_note}"
+            )
         elif 'oil' in q_lower or 'leak' in q_lower or 'smoke' in q_lower:
             return (
                 f"Fluid leaks or smoke from under the hood require immediate attention to prevent engine thermal or mechanical damage.\n\n"
@@ -320,6 +324,14 @@ JSON format required (no extra markdown outside of json):
                 "description": "Engine control unit detected combustion inefficiency due to fouled spark plugs, failing ignition coils, or vacuum leak.",
                 "recommended_service": "OBD-II Code Scan & Ignition System Tune-Up",
                 "estimated_cost": "$120 - $280"
+            }
+        elif any(w in text for w in ['accident', 'crash', 'collision', 'damage', 'dent', 'bumper', 'fender', 'hood', 'wreck']):
+            return {
+                "issue_title": f"Front-End Collision & Core Structural Damage ({car_info})",
+                "severity": "critical",
+                "description": "Front-end impact has compromised outer bodywork (bumper, hood, fender), with likely damage to the radiator support, cooling assembly, and steering/suspension geometry.",
+                "recommended_service": "Collision Repair, Radiator Core Support & Front Suspension Realignment",
+                "estimated_cost": "$1,800 - $4,500"
             }
         elif 'leak' in text or 'overheat' in text or 'coolant' in text or 'radiator' in text:
             return {
