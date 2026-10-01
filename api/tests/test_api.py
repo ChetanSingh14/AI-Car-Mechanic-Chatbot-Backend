@@ -247,3 +247,65 @@ class CarMechanicAPITestCase(TestCase):
         data = res.json()
         self.assertFalse(data['success'])
         self.assertEqual(data['error']['code'], 'NOT_FOUND')
+
+    def test_conversation_list_and_detail(self):
+        """Test listing conversations and retrieving conversation detail."""
+        conv = Conversation.objects.create(car_make="Mazda", car_model="CX-5", car_year="2022")
+        Message.objects.create(conversation=conv, sender='user', content="Strange humming sound")
+        Message.objects.create(conversation=conv, sender='assistant', content="Could be wheel bearing")
+
+        # List
+        res_list = self.client.get('/api/conversation/')
+        self.assertEqual(res_list.status_code, status.HTTP_200_OK)
+        data_list = res_list.json()
+        self.assertTrue(data_list['success'])
+        self.assertGreaterEqual(len(data_list['data']), 1)
+
+        # Detail
+        res_detail = self.client.get(f'/api/conversation/{conv.id}/')
+        self.assertEqual(res_detail.status_code, status.HTTP_200_OK)
+        data_detail = res_detail.json()
+        self.assertTrue(data_detail['success'])
+        self.assertEqual(data_detail['data']['car_make'], "Mazda")
+        self.assertEqual(len(data_detail['data']['messages']), 2)
+
+    def test_conversation_delete(self):
+        """Test deleting a conversation removes it and cascaded messages."""
+        conv = Conversation.objects.create(car_make="Audi", car_model="A4", car_year="2021")
+        conv_id = str(conv.id)
+
+        res_del = self.client.delete(f'/api/conversation/{conv_id}/')
+        self.assertEqual(res_del.status_code, status.HTTP_200_OK)
+        data = res_del.json()
+        self.assertTrue(data['success'])
+        self.assertTrue(data['data']['deleted'])
+        self.assertFalse(Conversation.objects.filter(id=conv.id).exists())
+
+    def test_booking_list_by_email(self):
+        """Test querying bookings by customer email."""
+        conv = Conversation.objects.create(car_make="Toyota", car_model="RAV4", car_year="2020")
+        diag = Diagnosis.objects.create(
+            conversation=conv,
+            issue_title="Brake Wear",
+            severity="medium",
+            description="Pads worn",
+            recommended_service="Brake Service",
+            estimated_cost="$200"
+        )
+        Booking.objects.create(
+            diagnosis=diag,
+            customer_name="Bob Smith",
+            customer_email="bob@example.com",
+            customer_phone="+15559876543",
+            preferred_date=timezone.now().date() + datetime.timedelta(days=3),
+            preferred_time="11:00 AM",
+            mechanic_name="Metro Auto"
+        )
+
+        res = self.client.get('/api/booking/?email=bob@example.com')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()
+        self.assertTrue(data['success'])
+        self.assertEqual(len(data['data']), 1)
+        self.assertEqual(data['data'][0]['customer_name'], "Bob Smith")
+
