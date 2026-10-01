@@ -6,7 +6,7 @@ class MediaAttachmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MediaAttachment
-        fields = ['id', 'conversation', 'file', 'file_url', 'file_type', 'original_name', 'analysis_summary', 'uploaded_at']
+        fields = ['id', 'conversation', 'message', 'file', 'file_url', 'file_type', 'original_name', 'analysis_summary', 'uploaded_at']
         read_only_fields = ['id', 'uploaded_at', 'analysis_summary']
 
     def get_file_url(self, obj):
@@ -19,9 +19,11 @@ class MediaAttachmentSerializer(serializers.ModelSerializer):
 
 
 class MessageSerializer(serializers.ModelSerializer):
+    media_attachments = MediaAttachmentSerializer(many=True, read_only=True)
+
     class Meta:
         model = Message
-        fields = ['id', 'conversation', 'sender', 'content', 'is_ai_generated', 'created_at']
+        fields = ['id', 'conversation', 'sender', 'content', 'is_ai_generated', 'created_at', 'media_attachments']
         read_only_fields = ['id', 'created_at']
 
 
@@ -33,12 +35,17 @@ class DiagnosisSerializer(serializers.ModelSerializer):
 
 
 class BookingSerializer(serializers.ModelSerializer):
-    diagnosis = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    diagnosis = serializers.UUIDField(required=True)
     diagnosis_detail = serializers.SerializerMethodField(read_only=True)
+    mechanic_name = serializers.CharField(required=False, allow_blank=True, default='')
 
     class Meta:
         model = Booking
-        fields = ['id', 'diagnosis', 'diagnosis_detail', 'customer_name', 'customer_email', 'customer_phone', 'preferred_date', 'preferred_time', 'notes', 'status', 'created_at']
+        fields = [
+            'id', 'diagnosis', 'diagnosis_detail', 'mechanic_name',
+            'customer_name', 'customer_email', 'customer_phone',
+            'preferred_date', 'preferred_time', 'notes', 'status', 'created_at'
+        ]
         read_only_fields = ['id', 'created_at', 'status']
 
     def get_diagnosis_detail(self, obj):
@@ -87,4 +94,4 @@ class MediaUploadSerializer(serializers.Serializer):
 
 
 class DiagnosisRequestSerializer(serializers.Serializer):
-    conversation_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    conversation_id = serializers.UUIDField(required=True)

@@ -8,9 +8,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Load environment variables from .env file
 load_dotenv(BASE_DIR / '.env')
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-car-mechanic-chatbot-super-secret-key-2026')
+# Safe defaults: DEBUG is False by default unless explicitly enabled
+DEBUG = os.getenv('DEBUG', 'False').lower() in ('true', '1', 't')
 
-DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 't')
+SECRET_KEY = os.getenv('SECRET_KEY', '')
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ValueError("CRITICAL: SECRET_KEY environment variable is required when DEBUG=False.")
+    SECRET_KEY = 'django-insecure-dev-car-mechanic-chatbot-key-2026'
 
 raw_hosts = os.getenv('ALLOWED_HOSTS', '*')
 ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(',') if h.strip()] if raw_hosts else ['*']
@@ -64,7 +69,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'core.wsgi.application'
 
-# Database - Default SQLite for simplicity & easy local testing (AWS Free Tier compatible)
+# Database - Default SQLite for simplicity & easy testing (AWS Free Tier compatible)
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -114,7 +119,13 @@ REST_FRAMEWORK = {
 }
 
 # CORS Configuration
-CORS_ALLOW_ALL_ORIGINS = True
+raw_cors = os.getenv('CORS_ALLOWED_ORIGINS', '')
+if raw_cors:
+    CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_cors.split(',') if origin.strip()]
+    CORS_ALLOW_ALL_ORIGINS = False
+else:
+    CORS_ALLOW_ALL_ORIGINS = True
+
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     '*',
@@ -129,8 +140,6 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:3000',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'http://13.234.4.236',
-    'https://13.234.4.236',
 ]
 raw_csrf = os.getenv('CSRF_TRUSTED_ORIGINS', '')
 if raw_csrf:
@@ -146,4 +155,3 @@ SPECTACULAR_SETTINGS = {
 
 # Gemini AI API Key
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-

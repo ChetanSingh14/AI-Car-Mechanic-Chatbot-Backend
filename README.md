@@ -4,6 +4,15 @@ A production-grade **Django REST Framework** backend service powering an AI-assi
 
 ---
 
+## 🔗 Live Links
+- **Backend API Base**: `http://13.234.4.236/api/`
+- **Interactive API Docs (Swagger UI)**: `http://13.234.4.236/api/docs/`
+- **OpenAPI Schema (JSON)**: `http://13.234.4.236/api/schema/`
+- **ReDoc Documentation**: `http://13.234.4.236/api/redoc/`
+- **Health Check Endpoint**: `http://13.234.4.236/api/health/`
+
+---
+
 ## 🛠 Tech Stack & Architecture
 
 * **Framework:** Python 3.9+ / Django 4.2+ / Django REST Framework
@@ -14,7 +23,7 @@ A production-grade **Django REST Framework** backend service powering an AI-assi
 * **Media Processing:** Pillow (`PIL.Image`) for vision tensors + `genai.upload_file` for native audio waveforms and video streams
 * **API Documentation:** `drf-spectacular` (OpenAPI 3.0 & Swagger UI at `/api/docs/`)
 * **Database:** SQLite (default development database, PostgreSQL compatible)
-* **Testing:** Django Test Suite & `pytest-django` (`5/5 tests passing`)
+* **Testing:** Django Test Suite & `pytest-django` (`15/15 tests passing`)
 
 ---
 

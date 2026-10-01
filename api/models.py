@@ -56,6 +56,7 @@ class MediaAttachment(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='media_attachments')
+    message = models.ForeignKey(Message, on_delete=models.SET_NULL, null=True, blank=True, related_name='media_attachments')
     file = models.FileField(upload_to='uploads/%Y/%m/%d/')
     file_type = models.CharField(max_length=10, choices=TYPE_CHOICES)
     original_name = models.CharField(max_length=255)
@@ -103,6 +104,7 @@ class Booking(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     diagnosis = models.ForeignKey(Diagnosis, on_delete=models.CASCADE, related_name='bookings')
+    mechanic_name = models.CharField(max_length=255, blank=True, default='')
     customer_name = models.CharField(max_length=100)
     customer_email = models.EmailField()
     customer_phone = models.CharField(max_length=20)

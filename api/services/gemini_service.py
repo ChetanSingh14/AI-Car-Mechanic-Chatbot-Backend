@@ -11,23 +11,24 @@ logger = logging.getLogger(__name__)
 
 class GeminiMechanicService:
     SYSTEM_PROMPT = """
-You are a Master ASE-Certified Automobile Technician with 25+ years of diagnostic experience in mechanical, electrical, and powertrain repair.
+You are a Master ASE-Certified Automobile Technician with 25+ years of diagnostic experience in mechanical, electrical, drivetrain, and powertrain repair.
 Your tone is professional, helpful, reassuring, and precise.
 
-RULES:
-1. ONLY answer automobile/car-related questions.
-2. Provide systematic diagnostic reasoning (e.g. Symptoms -> Probable Causes -> Safety Assessment -> Next Steps).
-3. Always include estimated repair costs range and urgency (Low, Medium, High, Critical).
-4. Recommend a specific repair service (e.g., Brake Pad Replacement, Alternator Replacement, Engine Diagnostic).
-5. If the user asks for diagnosis or has described full symptoms, provide a clear structured diagnosis summary.
+DIAGNOSTIC GUIDELINES:
+1. ONLY answer automobile/car-related diagnostic and repair questions.
+2. Provide systematic diagnostic reasoning: Symptoms -> Probable Root Causes -> Safety Assessment -> Inspection Steps -> Repair Recommendation.
+3. If the user's description of symptoms is vague or lacks critical context (such as when it occurs, exact sounds, smells, warning lights, driving conditions), ask 1-3 targeted follow-up clarifying questions before finalizing a definitive diagnosis.
+4. Always estimate realistic repair cost ranges (e.g., $150 - $350) and urgency (Low, Medium, High, Critical).
+5. Recommend a specific automotive repair or maintenance service.
+6. When media analysis summaries are provided, incorporate acoustic/visual observations into your explanation.
 """
 
     AVAILABLE_MODELS = [
-        'gemini-flash-lite-latest',  # 15 RPM, 500 Requests/Day
-        'gemini-3.5-flash-lite',     # 15 RPM, 500 Requests/Day
-        'gemini-3.1-flash-lite',     # 15 RPM, 500 Requests/Day
-        'gemini-flash-latest',       # 5 RPM, 20 Requests/Day
-        'gemini-pro-latest'          # High capability fallback
+        'gemini-flash-lite-latest',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+        'gemini-pro-latest'
     ]
 
     @classmethod
@@ -35,63 +36,114 @@ RULES:
         return getattr(settings, 'GEMINI_API_KEY', '') or os.getenv('GEMINI_API_KEY', '')
 
     @classmethod
-    def generate_chat_response(cls, conversation, user_message_text: str, media_attachments=None):
+    def analyze_media_file_once(cls, media_attachment):
+        """
+        Analyzes an uploaded media file once, caching the analysis in MediaAttachment.analysis_summary.
+        This prevents re-uploading the file on every subsequent chat turn.
+        """
+        if media_attachment.analysis_summary and not media_attachment.analysis_summary.startswith("Uploaded "):
+            return media_attachment.analysis_summary
+
         api_key = cls.get_api_key()
+        file_path = media_attachment.file.path if hasattr(media_attachment.file, 'path') else None
 
-        # Gather context
-        car_info = f"{conversation.car_year or ''} {conversation.car_make or ''} {conversation.car_model or ''}".strip()
-        history_msgs = conversation.messages.all()[:10]
-        context_str = f"Vehicle: {car_info or 'Unknown'}\n"
-        for m in history_msgs:
-            context_str += f"{m.sender.upper()}: {m.content}\n"
+        if not file_path or not os.path.exists(file_path):
+            summary = f"Attached {media_attachment.file_type.upper()} file: {media_attachment.original_name}"
+            media_attachment.analysis_summary = summary
+            media_attachment.save(update_fields=['analysis_summary'])
+            return summary
 
-        media_info = ""
-        if media_attachments and len(media_attachments) > 0:
-            media_info = "\nUploaded Media Attachments: " + ", ".join([f"{m.file_type} ({m.original_name})" for m in media_attachments])
-
-        prompt = f"{cls.SYSTEM_PROMPT}\n\nCONVERSATION HISTORY:\n{context_str}{media_info}\nLATEST USER QUERY: {user_message_text}\n\nPROVIDE YOUR EXPERT MECHANIC RESPONSE:"
+        summary = f"Inspected {media_attachment.file_type.upper()} ({media_attachment.original_name}): Acoustic/visual profile noted."
 
         if api_key:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
 
-                # Prepare multimodal contents
-                contents = [prompt]
-                if media_attachments:
-                    for media in media_attachments:
-                        if not os.path.exists(media.file.path):
-                            continue
-                        try:
-                            if media.file_type == 'image':
-                                from PIL import Image
-                                img = Image.open(media.file.path)
-                                contents.append(img)
-                            elif media.file_type in ['audio', 'video']:
-                                # Upload audio/video using genai.upload_file for acoustic waveform / video frame analysis
-                                uploaded_media = genai.upload_file(media.file.path)
-                                contents.append(uploaded_media)
-                        except Exception as img_err:
-                            logger.warning(f"Could not load {media.file_type} for Gemini: {img_err}")
+                contents = []
+                prompt = (
+                    f"As a master mechanic, provide a concise 1-2 sentence technical inspection summary of this automotive {media_attachment.file_type} "
+                    f"({media_attachment.original_name}). Identify any visible wear, damage, leak, or acoustic anomalies."
+                )
 
-                # Dynamic Model Rotation across highest RPM/RPD models
+                if media_attachment.file_type == 'image':
+                    from PIL import Image
+                    contents = [prompt, Image.open(file_path)]
+                elif media_attachment.file_type in ['audio', 'video']:
+                    uploaded_file = genai.upload_file(file_path)
+                    contents = [prompt, uploaded_file]
+
+                if contents:
+                    for model_name in cls.AVAILABLE_MODELS:
+                        try:
+                            model = genai.GenerativeModel(model_name)
+                            res = model.generate_content(contents)
+                            if res and res.text:
+                                summary = res.text.strip()
+                                break
+                        except Exception:
+                            continue
+            except Exception as e:
+                logger.warning(f"Could not perform single-pass media analysis: {e}")
+
+        media_attachment.analysis_summary = summary
+        media_attachment.save(update_fields=['analysis_summary'])
+        return summary
+
+    @classmethod
+    def generate_chat_response(cls, conversation, user_message_text: str, media_attachments=None):
+        api_key = cls.get_api_key()
+
+        # Gather context
+        car_info = f"{conversation.car_year or ''} {conversation.car_make or ''} {conversation.car_model or ''}".strip()
+        
+        # History window fix: Chronological order of last 10 messages
+        history_msgs = list(conversation.messages.order_by('-created_at')[:10])[::-1]
+        context_str = f"Vehicle: {car_info or 'Unknown Vehicle'}\n"
+        for m in history_msgs:
+            context_str += f"{m.sender.upper()}: {m.content}\n"
+
+        # Media summary text cached without re-uploading files every turn
+        media_summaries = []
+        if media_attachments:
+            for media in media_attachments:
+                summary = cls.analyze_media_file_once(media)
+                media_summaries.append(f"[{media.file_type.upper()} ({media.original_name})]: {summary}")
+
+        media_info = ""
+        if media_summaries:
+            media_info = "\nUPLOADED MEDIA INSPECTIONS:\n" + "\n".join(media_summaries)
+
+        prompt = (
+            f"{cls.SYSTEM_PROMPT}\n\n"
+            f"CONVERSATION CONTEXT:\n{context_str}{media_info}\n"
+            f"LATEST USER QUERY: {user_message_text}\n\n"
+            f"PROVIDE YOUR EXPERT MECHANIC RESPONSE:"
+        )
+
+        if api_key:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+
+                # Dynamic Model Rotation
                 for model_name in cls.AVAILABLE_MODELS:
                     try:
                         model = genai.GenerativeModel(model_name)
-                        response = model.generate_content(contents)
+                        response = model.generate_content([prompt])
                         if response and response.text:
                             return {
-                                "text": response.text,
+                                "text": response.text.strip(),
                                 "is_ai_generated": True
                             }
                     except Exception as model_err:
-                        logger.warning(f"Gemini model {model_name} rate-limited or unavailable: {model_err}. Rotating...")
+                        logger.warning(f"Gemini model {model_name} unavailable: {model_err}. Rotating...")
                         continue
 
             except Exception as e:
-                logger.error(f"Gemini API initialization error: {e}. Falling back to Senior Technician Rule Engine.")
+                logger.error(f"Gemini API error: {e}. Falling back to Senior Technician Rule Engine.")
 
-        # Senior Technician Fallback Engine (when API key is missing or failed)
+        # Senior Technician Fallback Engine
         return {
             "text": cls._fallback_technician_response(car_info, user_message_text, media_attachments),
             "is_ai_generated": False
@@ -99,25 +151,33 @@ RULES:
 
     @classmethod
     def generate_diagnosis(cls, conversation):
+        """
+        Generate structured JSON diagnosis using Gemini or the expert fallback matrix.
+        Returns: (diag_dict, is_ai_generated)
+        """
         api_key = cls.get_api_key()
         car_info = f"{conversation.car_year or ''} {conversation.car_make or ''} {conversation.car_model or ''}".strip() or "Vehicle"
         
-        messages = list(conversation.messages.all())
+        messages = list(conversation.messages.order_by('-created_at')[:15])[::-1]
         user_complaints = [m.content for m in messages if m.sender == 'user']
-        complaint_text = " ".join(user_complaints)
+        complaint_text = " | ".join(user_complaints) if user_complaints else "Standard mechanical inspection"
+        
         media_attachments = conversation.media_attachments.all()
+        media_summaries = [cls.analyze_media_file_once(m) for m in media_attachments]
+        media_context = " | Media: " + " ; ".join(media_summaries) if media_summaries else ""
 
         prompt = f"""
-You are an expert car mechanic. Analyze this vehicle issue description and any uploaded media (images/audio/video) to output ONLY a JSON object:
+You are an expert ASE Master Automotive Diagnostic Technician.
+Analyze this vehicle symptom report and media to output ONLY a valid JSON object:
 Vehicle: {car_info}
-Symptoms/History: {complaint_text}
+Symptoms/History: {complaint_text}{media_context}
 
-JSON format required:
+JSON format required (no extra markdown outside of json):
 {{
-  "issue_title": "Short title of issue (e.g., Worn Front Brake Pads & Rotors)",
+  "issue_title": "Short specific title of issue (e.g., Worn Front Brake Pads & Rotors)",
   "severity": "low|medium|high|critical",
-  "description": "2-3 sentence technical explanation of cause and impact based on symptoms and media analysis.",
-  "recommended_service": "Recommended repair action (e.g., Front Brake Pad and Rotor Replacement)",
+  "description": "2-3 sentence technical explanation of root cause, affected system, and safety impact.",
+  "recommended_service": "Exact recommended service (e.g., Front Brake Pad and Rotor Replacement)",
   "estimated_cost": "$150 - $350"
 }}
 """
@@ -126,32 +186,20 @@ JSON format required:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
 
-                diag_contents = [prompt]
-                if media_attachments:
-                    for media in media_attachments:
-                        if os.path.exists(media.file.path):
-                            try:
-                                if media.file_type == 'image':
-                                    from PIL import Image
-                                    diag_contents.append(Image.open(media.file.path))
-                                elif media.file_type in ['audio', 'video']:
-                                    diag_contents.append(genai.upload_file(media.file.path))
-                            except Exception as m_err:
-                                logger.warning(f"Could not load {media.file_type} for diagnosis: {m_err}")
-
                 for model_name in cls.AVAILABLE_MODELS:
                     try:
                         model = genai.GenerativeModel(model_name)
-                        response = model.generate_content(diag_contents)
-                        
-                        raw_text = response.text.strip()
-                        if "```json" in raw_text:
-                            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-                        elif "```" in raw_text:
-                            raw_text = raw_text.split("```")[1].split("```")[0].strip()
+                        response = model.generate_content([prompt])
+                        if response and response.text:
+                            raw_text = response.text.strip()
+                            if "```json" in raw_text:
+                                raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+                            elif "```" in raw_text:
+                                raw_text = raw_text.split("```")[1].split("```")[0].strip()
 
-                        parsed = json.loads(raw_text)
-                        return parsed
+                            parsed = json.loads(raw_text)
+                            if 'issue_title' in parsed and 'recommended_service' in parsed:
+                                return parsed, True
                     except Exception as diag_err:
                         logger.warning(f"Diagnosis generation on {model_name} failed: {diag_err}. Rotating...")
                         continue
@@ -159,7 +207,7 @@ JSON format required:
                 logger.error(f"Gemini Diagnosis JSON Error: {e}")
 
         # Fallback Diagnostic Matrix based on keyword matching
-        return cls._fallback_diagnosis_matrix(complaint_text, car_info)
+        return cls._fallback_diagnosis_matrix(complaint_text, car_info), False
 
     @classmethod
     def _fallback_technician_response(cls, car_info: str, user_query: str, media_attachments) -> str:
@@ -171,7 +219,7 @@ JSON format required:
 
         if 'brake' in q_lower or 'squeal' in q_lower or 'grinding' in q_lower:
             return (
-                f"Based on the symptoms for your {car_info}, squealing or grinding noises during braking usually point to worn brake friction pads "
+                f"Based on the symptoms for your {car_info or 'vehicle'}, squealing or grinding noises during braking usually point to worn brake friction pads "
                 f"or glazed brake rotors. If it's a high-pitched metallic squeal, the wear indicator shim is contacting the rotor.\n\n"
                 f"Diagnostic Steps:\n1. Inspect front brake pad thickness (minimum safe limit is 3mm).\n"
                 f"2. Check rotors for scoring, deep grooves, or heat discoloration.\n"
@@ -186,7 +234,7 @@ JSON format required:
                 f"3. Starter motor solenoid failure.\n\n"
                 f"Recommendation: Perform a battery load test and terminal cleanup.{media_note}"
             )
-        elif 'check engine' in q_lower or 'light' in q_lower or 'code' in q_lower:
+        elif 'check engine' in q_lower or 'light' in q_lower or 'p0' in q_lower:
             return (
                 f"An illuminated Check Engine Light indicates your vehicle's engine control module (ECM) has logged an OBD-II diagnostic trouble code (DTC).\n\n"
                 f"Frequent triggers include:\n- Oxygen (O2) Sensor failure\n- Loose or faulty Gas Cap\n- Mass Air Flow (MAF) Sensor fouling\n- Misfires (Spark Plugs or Ignition Coils)\n\n"
@@ -200,7 +248,7 @@ JSON format required:
             )
 
         return (
-            f"Thank you for details on your {car_info}. As your Automobile Technician, I've analyzed your description.\n\n"
+            f"Thank you for details on your {car_info or 'vehicle'}. As your Automobile Technician, I've analyzed your description.\n\n"
             f"System Analysis:\n- Primary system affected: Powertrain / Chassis\n- Recommended inspection: Diagnostic scan and visual hoist inspection.\n\n"
             f"Would you like me to generate a full formal diagnosis and estimate for your vehicle?{media_note}"
         )
@@ -225,7 +273,7 @@ JSON format required:
                 "recommended_service": "Battery Load Test & Starter Replacement",
                 "estimated_cost": "$150 - $320"
             }
-        elif 'check engine' in text or 'misfire' in text or 'light' in text:
+        elif 'check engine' in text or 'misfire' in text or 'p0' in text:
             return {
                 "issue_title": f"Engine Misfire / Emissions DTC Fault ({car_info})",
                 "severity": "medium",

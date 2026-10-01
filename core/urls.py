@@ -14,5 +14,9 @@ urlpatterns = [
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]
 
+# JSON Error Handlers
+handler404 = 'core.exceptions.custom_404_handler'
+handler500 = 'core.exceptions.custom_500_handler'
+
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

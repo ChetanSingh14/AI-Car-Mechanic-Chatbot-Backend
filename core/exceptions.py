@@ -1,7 +1,9 @@
+import logging
+from django.conf import settings
+from django.http import JsonResponse
 from rest_framework.views import exception_handler
 from rest_framework.response import Response
 from rest_framework import status
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +33,15 @@ def custom_exception_handler(exc, context):
         if isinstance(detail, dict):
             if 'detail' in detail:
                 message = str(detail['detail'])
+            elif 'message' in detail:
+                message = str(detail['message'])
             else:
-                message = "Validation or data payload error."
+                first_key = next(iter(detail))
+                first_val = detail[first_key]
+                if isinstance(first_val, list) and len(first_val) > 0:
+                    message = f"{first_key}: {first_val[0]}"
+                else:
+                    message = "Validation or data payload error."
         elif isinstance(detail, list):
             message = "; ".join([str(item) for item in detail])
 
@@ -41,22 +50,57 @@ def custom_exception_handler(exc, context):
             "error": {
                 "code": error_code,
                 "message": message,
-                "details": detail
+                "details": detail if settings.DEBUG else None
             }
         }
         response.data = formatted_data
     else:
-        logger.error(f"Unhandled Exception: {str(exc)}", exc_info=True)
+        logger.error(f"Unhandled Server Exception: {str(exc)}", exc_info=True)
+        formatted_data = {
+            "success": False,
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": "An unexpected server error occurred."
+            }
+        }
+        if settings.DEBUG:
+            formatted_data["error"]["details"] = str(exc)
+
         response = Response(
-            {
-                "success": False,
-                "error": {
-                    "code": "INTERNAL_SERVER_ERROR",
-                    "message": "An unexpected server error occurred.",
-                    "details": str(exc)
-                }
-            },
+            formatted_data,
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
     return response
+
+
+def custom_404_handler(request, exception=None):
+    """
+    Global Django 404 JSON Handler for unmatched routes.
+    """
+    return JsonResponse(
+        {
+            "success": False,
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "The requested endpoint or resource was not found."
+            }
+        },
+        status=404
+    )
+
+
+def custom_500_handler(request):
+    """
+    Global Django 500 JSON Handler.
+    """
+    return JsonResponse(
+        {
+            "success": False,
+            "error": {
+                "code": "INTERNAL_SERVER_ERROR",
+                "message": "An internal server error occurred."
+            }
+        },
+        status=500
+    )
