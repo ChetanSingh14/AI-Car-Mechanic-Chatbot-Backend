@@ -23,13 +23,16 @@ DIAGNOSTIC GUIDELINES:
 6. When media analysis summaries are provided, incorporate acoustic/visual observations into your explanation.
 """
 
-    AVAILABLE_MODELS = [
-        'gemini-flash-lite-latest',
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-1.5-flash',
-        'gemini-pro-latest'
-    ]
+    @classmethod
+    def get_models(cls):
+        raw = os.getenv('GEMINI_MODELS', '')
+        if raw:
+            return [m.strip() for m in raw.split(',') if m.strip()]
+        return [
+            'gemini-2.0-flash',
+            'gemini-1.5-flash',
+            'gemini-1.5-pro'
+        ]
 
     @classmethod
     def get_api_key(cls):
@@ -38,34 +41,29 @@ DIAGNOSTIC GUIDELINES:
     @classmethod
     def analyze_media_file_once(cls, media_attachment):
         """
-        Analyzes an uploaded media file once, caching the analysis in MediaAttachment.analysis_summary.
-        This prevents re-uploading the file on every subsequent chat turn.
+        Analyzes an uploaded media file once if Gemini is available, caching the analysis in MediaAttachment.analysis_summary.
+        If Gemini is unavailable or fails, returns None and leaves analysis_summary pending for future retry.
         """
-        if media_attachment.analysis_summary and not media_attachment.analysis_summary.startswith("Uploaded "):
+        if media_attachment.analysis_summary:
             return media_attachment.analysis_summary
 
         api_key = cls.get_api_key()
         file_path = media_attachment.file.path if hasattr(media_attachment.file, 'path') else None
 
         if not file_path or not os.path.exists(file_path):
-            summary = f"Attached {media_attachment.file_type.upper()} file: {media_attachment.original_name}"
-            media_attachment.analysis_summary = summary
-            media_attachment.save(update_fields=['analysis_summary'])
-            return summary
-
-        summary = f"Inspected {media_attachment.file_type.upper()} ({media_attachment.original_name}): Acoustic/visual profile noted."
+            return None
 
         if api_key:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
 
-                contents = []
                 prompt = (
                     f"As a master mechanic, provide a concise 1-2 sentence technical inspection summary of this automotive {media_attachment.file_type} "
                     f"({media_attachment.original_name}). Identify any visible wear, damage, leak, or acoustic anomalies."
                 )
 
+                contents = []
                 if media_attachment.file_type == 'image':
                     from PIL import Image
                     contents = [prompt, Image.open(file_path)]
@@ -74,21 +72,23 @@ DIAGNOSTIC GUIDELINES:
                     contents = [prompt, uploaded_file]
 
                 if contents:
-                    for model_name in cls.AVAILABLE_MODELS:
+                    for model_name in cls.get_models():
                         try:
                             model = genai.GenerativeModel(model_name)
                             res = model.generate_content(contents)
                             if res and res.text:
                                 summary = res.text.strip()
-                                break
-                        except Exception:
+                                media_attachment.analysis_summary = summary
+                                media_attachment.save(update_fields=['analysis_summary'])
+                                return summary
+                        except Exception as model_err:
+                            logger.warning(f"Media analysis with {model_name} failed: {model_err}")
                             continue
             except Exception as e:
-                logger.warning(f"Could not perform single-pass media analysis: {e}")
+                logger.warning(f"Could not perform single-pass media analysis with Gemini: {e}")
 
-        media_attachment.analysis_summary = summary
-        media_attachment.save(update_fields=['analysis_summary'])
-        return summary
+        # When Gemini didn't run or failed, keep analysis_summary as None (pending) without saving fake text
+        return None
 
     @classmethod
     def generate_chat_response(cls, conversation, user_message_text: str, media_attachments=None):
@@ -108,7 +108,8 @@ DIAGNOSTIC GUIDELINES:
         if media_attachments:
             for media in media_attachments:
                 summary = cls.analyze_media_file_once(media)
-                media_summaries.append(f"[{media.file_type.upper()} ({media.original_name})]: {summary}")
+                if summary:
+                    media_summaries.append(f"[{media.file_type.upper()} ({media.original_name})]: {summary}")
 
         media_info = ""
         if media_summaries:
@@ -126,8 +127,8 @@ DIAGNOSTIC GUIDELINES:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
 
-                # Dynamic Model Rotation
-                for model_name in cls.AVAILABLE_MODELS:
+                # Dynamic Model Rotation from configurable list
+                for model_name in cls.get_models():
                     try:
                         model = genai.GenerativeModel(model_name)
                         response = model.generate_content([prompt])
@@ -163,7 +164,7 @@ DIAGNOSTIC GUIDELINES:
         complaint_text = " | ".join(user_complaints) if user_complaints else "Standard mechanical inspection"
         
         media_attachments = conversation.media_attachments.all()
-        media_summaries = [cls.analyze_media_file_once(m) for m in media_attachments]
+        media_summaries = [cls.analyze_media_file_once(m) for m in media_attachments if cls.analyze_media_file_once(m)]
         media_context = " | Media: " + " ; ".join(media_summaries) if media_summaries else ""
 
         prompt = f"""
@@ -186,7 +187,7 @@ JSON format required (no extra markdown outside of json):
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
 
-                for model_name in cls.AVAILABLE_MODELS:
+                for model_name in cls.get_models():
                     try:
                         model = genai.GenerativeModel(model_name)
                         response = model.generate_content([prompt])
@@ -215,7 +216,12 @@ JSON format required (no extra markdown outside of json):
 
         media_note = ""
         if media_attachments and len(media_attachments) > 0:
-            media_note = f"\n\n[Media Analysis]: Received {len(media_attachments)} file(s). Inspection noted visual/acoustic anomaly matching symptom report."
+            media_note = (
+                f"\n\n📎 *Note on attached media ({len(media_attachments)} file(s)):* "
+                f"Automated AI media analysis is currently pending/offline. "
+                f"Please describe what you see or hear in detail (e.g. location of noise, color of fluid or smoke) "
+                f"so I can provide the most accurate assessment!"
+            )
 
         if 'brake' in q_lower or 'squeal' in q_lower or 'grinding' in q_lower:
             return (

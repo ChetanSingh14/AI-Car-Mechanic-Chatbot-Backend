@@ -1,48 +1,66 @@
 # 🚗 AI Car Mechanic Chatbot — Django REST Backend
 
-A production-grade **Django REST Framework** backend service powering an AI-assisted Automotive Diagnostic Assistant and Mechanic Booking system. This service integrates with **Google Gemini Multimodal AI** for real-time troubleshooting, audio acoustic analysis (engine knocking, brake squeal), image inspection (dashboard warning lights, component wear), video analysis, severity assessment, and frictionless appointment booking.
+A **Django REST Framework** backend service powering an AI-assisted Automotive Diagnostic Assistant and Mechanic Booking system. This service integrates with **Google Gemini Multimodal AI** for automotive troubleshooting, audio acoustic analysis (engine knocking, brake squeal), image inspection (dashboard warning lights, component wear), video analysis, severity assessment, and appointment booking with anonymous client session privacy isolation.
 
 ---
 
 ## 🔗 Live Links
-- **Backend API Base**: `http://13.234.4.236/api/`
-- **Interactive API Docs (Swagger UI)**: `http://13.234.4.236/api/docs/`
-- **OpenAPI Schema (JSON)**: `http://13.234.4.236/api/schema/`
-- **ReDoc Documentation**: `http://13.234.4.236/api/redoc/`
-- **Health Check Endpoint**: `http://13.234.4.236/api/health/`
+- **[Live Frontend Application](https://ai-car-mechanic-chatbot-frontend.vercel.app)**
+- **[Backend API Base](http://13.234.4.236/api/)**
+- **[Interactive API Docs (Swagger UI)](http://13.234.4.236/api/docs/)**
+- **[OpenAPI Schema (JSON)](http://13.234.4.236/api/schema/)**
+- **[ReDoc Documentation](http://13.234.4.236/api/redoc/)**
+- **[Health Check Endpoint](http://13.234.4.236/api/health/)**
 
 ---
 
 ## 🛠 Tech Stack & Architecture
 
-* **Framework:** Python 3.9+ / Django 4.2+ / Django REST Framework
+* **Framework:** Python 3.10+ / Django 4.2+ / Django REST Framework
 * **AI Engine:** Google Generative AI Multimodal SDK (`google-generativeai`)
-  * **Primary High-Quota Models:** `gemini-flash-lite-latest`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` (15 RPM / 500 Requests Per Day)
-  * **Failover Models:** `gemini-flash-latest`, `gemini-pro-latest`
-  * **Fallback Layer:** Offline Deterministic Senior Technician Rule Matrix
-* **Media Processing:** Pillow (`PIL.Image`) for vision tensors + `genai.upload_file` for native audio waveforms and video streams
+  * **Supported Models (Configurable via `GEMINI_MODELS`):** `gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-1.5-pro`
+  * **Fallback Layer:** Offline Deterministic Automotive Rule Matrix (`is_ai_generated: false`)
+* **Media Processing:** Pillow (`PIL.Image`) for vision tensors and `genai.upload_file` for native audio waveforms and video streams (4 MB limit)
 * **API Documentation:** `drf-spectacular` (OpenAPI 3.0 & Swagger UI at `/api/docs/`)
 * **Database:** SQLite (default development database, PostgreSQL compatible)
-* **Testing:** Django Test Suite & `pytest-django` (`15/15 tests passing`)
+* **Testing:** Django Test Suite (`23/23 tests passing`)
+
+---
+
+## 🤖 Rule-Based (0-Token) vs. Gemini AI Execution Matrix
+
+To optimize response latency, eliminate unnecessary token expenditures, and guarantee robust fallback behavior, the system separates requests into deterministic rule evaluation and multimodal AI processing:
+
+| Feature / Request Type | Execution Engine | Token Cost | Behavior & Fallback |
+| :--- | :--- | :--- | :--- |
+| **Off-Topic / Non-Automotive Chat** | `IntentService` (Rules) | **0 Tokens** | Evaluates keywords and regex patterns in `<1ms`. Rejects non-automotive queries (e.g. general chat, recipes, coding) without calling Gemini. |
+| **Known OBD-II Trouble Codes** | Rule Matrix / Knowledge Base | **0 Tokens** | Direct OBD-II code lookups (`P0300`, `P0420`, `P0171`, etc.) return structured technical definitions, symptoms, and estimated repair costs immediately. |
+| **Automotive Diagnostic Chat** | Gemini Multimodal AI | Active Quota | Context-aware diagnostic conversation incorporating vehicle make, model, year, and reported symptoms. Returns `is_ai_generated: true`. |
+| **Audio Acoustic Analysis** | Gemini Multimodal AI | Active Quota | Ingests recorded audio (knocking, squeal, rattle) to analyze frequency profile and mechanical friction wear. |
+| **Image & Video Inspection** | Gemini Multimodal Vision | Active Quota | Inspects photos and video clips (exhaust smoke, belt wobble, fluid leaks, dashboard lights). |
+| **Diagnostic Report Generation** | Gemini Structured AI | Active Quota | Synthesizes chat history, vehicle specs, and media findings into a structured diagnosis with severity, labor hours, and itemized costs. |
+| **Offline / Quota Fallback** | Deterministic Fallback Engine | **0 Tokens** | When `GEMINI_API_KEY` is missing or the API returns rate limits (429) or errors, the system responds with a honest structured fallback message (`is_ai_generated: false`), leaves media analysis pending for retry, and prompts the user to describe what they see/hear. |
+| **Session & Booking Operations** | DRF ORM / Database | **0 Tokens** | Session creation, listing, deleting, client-token isolation (`X-Client-Token`), booking reservations, and status retrieval run purely on the database. |
 
 ---
 
 ## 🚀 Key Features
 
-* 💬 **Automotive Diagnostic Chat (`POST /api/chat/`):** Context-aware mechanic conversation tailored to the vehicle's make, model, year, and reported symptoms.
-* 🎙️ **Live Audio Acoustic Analysis (`POST /api/upload/`):** Ingests recorded engine sounds, rattles, squeals, or knocks, uploading waveforms directly to Gemini's audio encoder to pinpoint friction wear, misfires, or loose components.
+* 💬 **Automotive Diagnostic Chat (`POST /api/chat/`):** Context-aware mechanic conversation tailored to the vehicle's make, model, year, and symptoms.
+* 🎙️ **Audio Acoustic Analysis (`POST /api/upload/`):** Ingests recorded engine sounds, rattles, squeals, or knocks, uploading waveforms directly to Gemini's audio encoder to pinpoint friction wear, misfires, or loose components.
 * 📷 **Visual & Video Inspection:** Evaluates images and video recordings (exhaust smoke color, serpentine belt wobble, fluid leaks) through multimodal vision context.
-* ⚡ **Zero-Token Intent Pre-Filtering (`IntentService`):** Deterministically evaluates queries before calling the LLM. Rejects non-automotive queries (recipes, coding, politics) in `<1ms` with **0 API tokens spent**.
-* 📋 **Diagnostic Summary & Cost Report (`POST /api/diagnosis/`):** Categorizes issues with standardized severity ratings (*Low*, *Medium*, *High*, *Critical*), recommended repairs, and itemized cost ranges.
-* 📅 **Mechanic Appointment Booking (`POST /api/booking/`):** Seamless session-based guest booking tied to diagnostic records with status tracking.
-* 🛡️ **Graceful Fallback & Model Failover:** Automatically rotates across high-capacity Gemini models (500 RPD) upon any 429 rate limit or network error, ensuring the user experience never crashes.
+* ⚡ **Zero-Token Intent Pre-Filtering (`IntentService`):** Deterministically evaluates queries before calling the LLM. Rejects non-automotive queries in `<1ms` with **0 API tokens spent**.
+* 📋 **Diagnostic Summary & Cost Report (`POST /api/diagnosis/`):** Categorizes issues with standardized severity ratings (*Low*, *Medium*, *High*, *Critical*), recommended repairs, and itemized cost ranges. Uses caching based on `updated_at`.
+* 📅 **Mechanic Appointment Booking (`POST /api/booking/`):** Session-based guest booking tied to diagnostic records with status tracking.
+* 🔒 **Privacy & Client Isolation:** Client browser token (`X-Client-Token`) isolates conversations and booking records per user session with 404 access control on mismatched tokens.
+* 🛡️ **Graceful Fallback & Model Failover:** Automatically rotates across active Gemini models upon any 429 rate limit or network error without generating deceptive synthetic text.
 
 ---
 
 ## 📋 Requirements & Prerequisites
 
-* **Python 3.9+** (Tested on Python 3.9, 3.10, 3.11, 3.12)
-* **Google Gemini API Key** (Free from [Google AI Studio](https://aistudio.google.com/))
+* **Python 3.10+** (Tested on Python 3.10, 3.11, 3.12)
+* **Google Gemini API Key** (from [Google AI Studio](https://aistudio.google.com/))
 
 ---
 
@@ -59,8 +77,6 @@ cd AI-Car-Mechanic-Chatbot-Backend
 python3 -m venv venv
 source venv/bin/activate
 ```
-
-> **Note for macOS / Linux:** If `python` is not aliased in your shell, always use `python3` and `pip` within the activated `venv`.
 
 ### 3. Install Dependencies
 ```bash
@@ -80,6 +96,7 @@ SECRET_KEY=your_django_secret_key_here
 ALLOWED_HOSTS=localhost,127.0.0.1
 CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODELS=gemini-2.0-flash,gemini-1.5-flash,gemini-1.5-pro
 ```
 
 ### 5. Apply Database Migrations
@@ -97,14 +114,14 @@ The backend will be available at `http://127.0.0.1:8000/`.
 
 ## 🧪 Running Tests
 
-Run the automated test suite verifying all 5 core endpoints and intent classification:
+Run the automated test suite verifying all 5 core endpoints, client privacy isolation, 4 MB upload limits, intent classification, and OpenAPI schema compliance:
 ```bash
-python3 manage.py test api.tests.test_api
+python3 manage.py test api
 ```
 
-Or using `pytest`:
+Validate OpenAPI schema with `drf-spectacular`:
 ```bash
-pytest
+python3 manage.py spectacular --validate --fail-on-warn
 ```
 
 ---
@@ -114,13 +131,18 @@ pytest
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `POST` | `/api/chat/` | Send message & receive AI diagnostic response |
-| `POST` | `/api/upload/` | Upload image, audio recording, or video attachment |
+| `POST` | `/api/upload/` | Upload image, audio recording, or video attachment (max 4 MB) |
 | `POST` | `/api/diagnosis/` | Generate diagnostic summary & severity report |
 | `POST` | `/api/booking/` | Create mechanic appointment booking |
 | `GET` | `/api/booking/<uuid>/` | Fetch booking confirmation details |
+| `GET` | `/api/booking/` | List bookings for current client token |
 | `GET` | `/api/conversation/<uuid>/` | Retrieve full chat and diagnostic history |
+| `GET` | `/api/conversation/` | List conversations for current client token |
+| `DELETE`| `/api/conversation/<uuid>/` | Delete conversation for current client token |
+| `GET` | `/api/health/` | Service health status |
 | `GET` | `/api/docs/` | Interactive Swagger UI documentation |
 | `GET` | `/api/redoc/` | ReDoc API documentation |
+| `GET` | `/api/schema/` | OpenAPI 3.0 Schema (YAML/JSON) |
 
 ---
 
@@ -137,18 +159,18 @@ sequenceDiagram
     participant DB as SQLite (db.sqlite3)
 
     User->>Web: Records engine knock or uploads leak image
-    Web->>API: POST /api/upload/ (multipart FormData)
+    Web->>API: POST /api/upload/ (multipart FormData, max 4MB)
     API->>DB: Save MediaAttachment & store file in /media/
     API-->>Web: Return MediaAttachment JSON with preview URL
 
     User->>Web: Sends message describing symptoms
-    Web->>API: POST /api/chat/ { message, car_make, ... }
+    Web->>API: POST /api/chat/ { message, car_make, ... } (X-Client-Token)
     API->>Intent: Check domain keywords
     alt Off-Topic Query
         Intent-->>API: Reject off-topic (<1ms, 0 AI tokens)
     else Mechanical Query
         API->>AI: generate_content([prompt, audio_waveform, image_tensors])
-        AI-->>API: Senior Mechanic diagnostic assessment
+        AI-->>API: Diagnostic assessment
     end
     API->>DB: Persist User & Assistant messages
     API-->>Web: Return Assistant Response JSON
@@ -173,13 +195,13 @@ sequenceDiagram
 backend/
 ├── api/
 │   ├── models.py            # Normalized ORM Schemas (Conversation, Message, MediaAttachment, Diagnosis, Booking)
-│   ├── views.py             # Thin REST Controllers (Chat, Upload, Diagnosis, Booking)
+│   ├── views.py             # Thin REST Controllers (Chat, Upload, Diagnosis, Booking, Conversation)
 │   ├── serializers.py       # Two-way payload validation and JSON formatters
 │   ├── services/            # Isolated Business Logic Layer
 │   │   ├── intent_service.py   # Rule-based heuristics & off-topic filter (AI token saver)
 │   │   ├── gemini_service.py   # Multimodal Gemini engine (Audio/Video/Vision) with failover
 │   │   └── booking_service.py  # Appointment reservation and verification
-│   ├── tests/               # Automated unit & integration tests
+│   ├── tests/               # Automated unit & integration tests (23 tests)
 │   └── urls.py              # Application URL routing
 ├── core/
 │   ├── settings.py          # Master configuration (CORS, DB, Media, DRF)
@@ -193,8 +215,6 @@ backend/
 ├── .gitignore
 └── README.md
 ```
-
----
 
 ---
 
@@ -258,8 +278,8 @@ SECRET_KEY=your_production_secret_key_here
 ALLOWED_HOSTS=*
 CSRF_TRUSTED_ORIGINS=https://*.vercel.app,http://<your-ec2-ip-or-domain>
 GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODELS=gemini-2.0-flash,gemini-1.5-flash,gemini-1.5-pro
 ```
-Save with `Ctrl + O` -> `Enter` -> `Ctrl + X`.
 
 #### 5. Apply Migrations & Static Files
 ```bash
@@ -306,14 +326,13 @@ Create the Nginx server block:
 ```bash
 sudo nano /etc/nginx/sites-available/car_mechanic
 ```
-Paste the following configuration (replace `13.234.4.236` with your public IP):
+Paste the following configuration (replace `<your-ec2-ip-or-domain>` with your public IP or domain):
 ```nginx
 server {
     listen 80;
     server_name <your-ec2-ip-or-domain>;
 
-    client_max_body_size 50M;
-
+    client_max_body_size 10M;
 
     # Proxy API requests to Gunicorn
     location / {
@@ -345,12 +364,8 @@ sudo systemctl restart nginx
 ```
 
 #### 8. Set File System Permissions for Media Uploads
-To allow Nginx (`www-data` user) to read and stream user uploads without `403 Forbidden` errors:
 ```bash
-# Allow Nginx to traverse home directory
 sudo chmod 755 /home/ubuntu
-
-# Grant read/write access to media files
 sudo chmod -R 775 /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend/media
 sudo chown -R ubuntu:www-data /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend/media
 sudo systemctl reload nginx
@@ -360,17 +375,17 @@ sudo systemctl reload nginx
 
 ### Phase 2: Frontend Deployment on Vercel
 
-
 #### 1. Import Repository into Vercel
 1. Log in to [Vercel](https://vercel.com) and click **Add New Project**.
 2. Select your `AI-Car-Mechanic-Chatbot-Frontend` repository.
 3. Framework Preset: **Next.js** (detected automatically).
 
 #### 2. Set Environment Variables
-In the **Environment Variables** section:
-* `NEXT_PUBLIC_API_URL`: `/api`
+In the **Environment Variables** section on Vercel:
 * `BACKEND_API_URL`: `http://<your-ec2-ip-or-domain>/api`
+* `NEXT_PUBLIC_API_URL`: `http://<your-ec2-ip-or-domain>/api`
 
+*(Do not set `NEXT_PUBLIC_API_URL=/api` on Vercel, as the Next.js server proxy resolves target URLs using `BACKEND_API_URL` or `NEXT_PUBLIC_API_URL` to route calls server-to-server to your EC2 backend).*
 
 #### 3. Mixed Content & SSL Protection
 Because Vercel runs on `https://` and EC2 IP addresses default to `http://`, the frontend includes built-in Next.js proxy route handlers (`/api/backend/*` and `/media/*`). This routes calls server-to-server, preventing browser Mixed Content blocking while ensuring fast streaming.
@@ -382,7 +397,7 @@ Click **Deploy**. Your frontend is live with SSL at `https://your-project.vercel
 
 ### Phase 3: Continuous Updates & Maintenance
 
-Whenever you push new code to GitHub, update your AWS EC2 server in seconds:
+Whenever you push new code to GitHub, update your AWS EC2 server:
 
 ```bash
 cd /home/ubuntu/AI-Car-Mechanic-Chatbot-Backend
@@ -397,4 +412,3 @@ sudo systemctl restart gunicorn
 
 ## 📄 License
 This project is licensed under the MIT License.
-

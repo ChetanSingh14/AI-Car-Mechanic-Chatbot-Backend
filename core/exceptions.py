@@ -7,6 +7,26 @@ from rest_framework import status
 
 logger = logging.getLogger(__name__)
 
+def _clean_error_message(data):
+    if isinstance(data, dict):
+        if 'detail' in data and not isinstance(data['detail'], (dict, list)):
+            return str(data['detail'])
+        items = []
+        for key, val in data.items():
+            clean_val = _clean_error_message(val)
+            if key in ('non_field_errors', 'detail', 'error'):
+                items.append(clean_val)
+            else:
+                items.append(f"{key}: {clean_val}")
+        return "; ".join(items) if items else "Validation error."
+    elif isinstance(data, (list, tuple)):
+        clean_items = [_clean_error_message(item) for item in data]
+        return "; ".join(clean_items) if clean_items else "Validation error."
+    elif hasattr(data, 'string'):
+        return str(data.string)
+    return str(data)
+
+
 def custom_exception_handler(exc, context):
     """
     Custom DRF exception handler to ensure standard JSON error response format.
@@ -28,22 +48,7 @@ def custom_exception_handler(exc, context):
             error_code = str(exc.default_code).upper()
 
         detail = response.data
-        message = "An error occurred while processing your request."
-        
-        if isinstance(detail, dict):
-            if 'detail' in detail:
-                message = str(detail['detail'])
-            elif 'message' in detail:
-                message = str(detail['message'])
-            else:
-                first_key = next(iter(detail))
-                first_val = detail[first_key]
-                if isinstance(first_val, list) and len(first_val) > 0:
-                    message = f"{first_key}: {first_val[0]}"
-                else:
-                    message = "Validation or data payload error."
-        elif isinstance(detail, list):
-            message = "; ".join([str(item) for item in detail])
+        message = _clean_error_message(detail)
 
         formatted_data = {
             "success": False,

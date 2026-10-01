@@ -15,6 +15,7 @@ class Conversation(models.Model):
     car_model = models.CharField(max_length=50, blank=True, null=True)
     car_year = models.CharField(max_length=10, blank=True, null=True)
     symptom_category = models.CharField(max_length=50, blank=True, null=True)
+    client_token = models.CharField(max_length=128, blank=True, null=True, db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
 
     class Meta:
@@ -86,6 +87,7 @@ class Diagnosis(models.Model):
     recommended_service = models.CharField(max_length=200)
     estimated_cost = models.CharField(max_length=100, default="$100 - $300")
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-created_at']

@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 from .models import Conversation, Message, MediaAttachment, Diagnosis, Booking
 
 class MediaAttachmentSerializer(serializers.ModelSerializer):
@@ -9,6 +10,7 @@ class MediaAttachmentSerializer(serializers.ModelSerializer):
         fields = ['id', 'conversation', 'message', 'file', 'file_url', 'file_type', 'original_name', 'analysis_summary', 'uploaded_at']
         read_only_fields = ['id', 'uploaded_at', 'analysis_summary']
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_file_url(self, obj):
         request = self.context.get('request')
         if obj.file and hasattr(obj.file, 'url'):
@@ -30,8 +32,8 @@ class MessageSerializer(serializers.ModelSerializer):
 class DiagnosisSerializer(serializers.ModelSerializer):
     class Meta:
         model = Diagnosis
-        fields = ['id', 'conversation', 'issue_title', 'severity', 'description', 'recommended_service', 'estimated_cost', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'conversation', 'issue_title', 'severity', 'description', 'recommended_service', 'estimated_cost', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class BookingSerializer(serializers.ModelSerializer):
@@ -54,6 +56,7 @@ class BookingSerializer(serializers.ModelSerializer):
             ret['diagnosis'] = str(instance.diagnosis_id)
         return ret
 
+    @extend_schema_field(DiagnosisSerializer)
     def get_diagnosis_detail(self, obj):
         if hasattr(obj, 'diagnosis') and obj.diagnosis:
             return DiagnosisSerializer(obj.diagnosis).data
@@ -73,8 +76,8 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Conversation
-        fields = ['id', 'car_make', 'car_model', 'car_year', 'symptom_category', 'status', 'messages', 'media_attachments', 'diagnosis', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = ['id', 'car_make', 'car_model', 'car_year', 'symptom_category', 'client_token', 'status', 'messages', 'media_attachments', 'diagnosis', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'client_token', 'created_at', 'updated_at']
 
 
 class ChatRequestSerializer(serializers.Serializer):
@@ -93,11 +96,12 @@ class MediaUploadSerializer(serializers.Serializer):
     file = serializers.FileField(required=True)
 
     def validate_file(self, value):
-        max_size = 50 * 1024 * 1024  # 50MB max limit
+        max_size = 4 * 1024 * 1024  # 4MB max limit (Vercel payload limit)
         if value.size > max_size:
-            raise serializers.ValidationError("File size exceeds maximum limit of 50MB.")
+            raise serializers.ValidationError("File size exceeds maximum limit of 4MB.")
         return value
 
 
 class DiagnosisRequestSerializer(serializers.Serializer):
     conversation_id = serializers.UUIDField(required=True)
+

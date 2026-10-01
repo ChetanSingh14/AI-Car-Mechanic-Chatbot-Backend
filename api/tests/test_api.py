@@ -12,6 +12,11 @@ from api.models import Conversation, Message, MediaAttachment, Diagnosis, Bookin
 class CarMechanicAPITestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.api_key_patcher = patch('api.services.gemini_service.GeminiMechanicService.get_api_key', return_value='')
+        self.api_key_patcher.start()
+
+    def tearDown(self):
+        self.api_key_patcher.stop()
 
     def test_health_check_endpoint(self):
         """Test GET /api/health/ returns 200 OK and healthy status."""
@@ -19,6 +24,7 @@ class CarMechanicAPITestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.json()
         self.assertEqual(data.get('status'), 'healthy')
+
 
     @patch('api.services.gemini_service.GeminiMechanicService.generate_chat_response')
     def test_chat_non_automotive_query_rejected_without_ai(self, mock_gemini):
@@ -250,24 +256,25 @@ class CarMechanicAPITestCase(TestCase):
 
     def test_conversation_list_and_detail(self):
         """Test listing conversations and retrieving conversation detail."""
-        conv = Conversation.objects.create(car_make="Mazda", car_model="CX-5", car_year="2022")
+        conv = Conversation.objects.create(car_make="Mazda", car_model="CX-5", car_year="2022", client_token="tok_list_detail")
         Message.objects.create(conversation=conv, sender='user', content="Strange humming sound")
         Message.objects.create(conversation=conv, sender='assistant', content="Could be wheel bearing")
 
         # List
-        res_list = self.client.get('/api/conversation/')
+        res_list = self.client.get('/api/conversation/', HTTP_X_CLIENT_TOKEN="tok_list_detail")
         self.assertEqual(res_list.status_code, status.HTTP_200_OK)
         data_list = res_list.json()
         self.assertTrue(data_list['success'])
         self.assertGreaterEqual(len(data_list['data']), 1)
 
         # Detail
-        res_detail = self.client.get(f'/api/conversation/{conv.id}/')
+        res_detail = self.client.get(f'/api/conversation/{conv.id}/', HTTP_X_CLIENT_TOKEN="tok_list_detail")
         self.assertEqual(res_detail.status_code, status.HTTP_200_OK)
         data_detail = res_detail.json()
         self.assertTrue(data_detail['success'])
         self.assertEqual(data_detail['data']['car_make'], "Mazda")
         self.assertEqual(len(data_detail['data']['messages']), 2)
+
 
     def test_conversation_delete(self):
         """Test deleting a conversation removes it and cascaded messages."""
@@ -283,7 +290,7 @@ class CarMechanicAPITestCase(TestCase):
 
     def test_booking_list_by_email(self):
         """Test querying bookings by customer email."""
-        conv = Conversation.objects.create(car_make="Toyota", car_model="RAV4", car_year="2020")
+        conv = Conversation.objects.create(car_make="Toyota", car_model="RAV4", car_year="2020", client_token="tok-123")
         diag = Diagnosis.objects.create(
             conversation=conv,
             issue_title="Brake Wear",
@@ -302,10 +309,104 @@ class CarMechanicAPITestCase(TestCase):
             mechanic_name="Metro Auto"
         )
 
-        res = self.client.get('/api/booking/?email=bob@example.com')
+        res = self.client.get('/api/booking/?email=bob@example.com', HTTP_X_CLIENT_TOKEN="tok-123")
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         data = res.json()
         self.assertTrue(data['success'])
         self.assertEqual(len(data['data']), 1)
         self.assertEqual(data['data'][0]['customer_name'], "Bob Smith")
+
+    def test_privacy_client_token_isolation(self):
+        """Test conversations and bookings belonging to token A cannot be accessed or deleted by token B."""
+        # Create conversation with Token A
+        res_a = self.client.post(
+            '/api/chat/',
+            {"message": "Honda Civic 2020 rattling noise"},
+            format='json',
+            HTTP_X_CLIENT_TOKEN="client_alpha_token"
+        )
+        self.assertEqual(res_a.status_code, status.HTTP_200_OK)
+        conv_id_a = res_a.json()['data']['conversation_id']
+
+        # Token A lists conversations -> sees conv_id_a
+        list_a = self.client.get('/api/conversation/', HTTP_X_CLIENT_TOKEN="client_alpha_token")
+        self.assertEqual(list_a.status_code, status.HTTP_200_OK)
+        ids_a = [c['id'] for c in list_a.json()['data']]
+        self.assertIn(conv_id_a, ids_a)
+
+        # Token B lists conversations -> does NOT see conv_id_a
+        list_b = self.client.get('/api/conversation/', HTTP_X_CLIENT_TOKEN="client_beta_token")
+        self.assertEqual(list_b.status_code, status.HTTP_200_OK)
+        ids_b = [c['id'] for c in list_b.json()['data']]
+        self.assertNotIn(conv_id_a, ids_b)
+
+        # Token B tries to get conv_id_a -> 404
+        get_b = self.client.get(f'/api/conversation/{conv_id_a}/', HTTP_X_CLIENT_TOKEN="client_beta_token")
+        self.assertEqual(get_b.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Token B tries to delete conv_id_a -> 404
+        del_b = self.client.delete(f'/api/conversation/{conv_id_a}/', HTTP_X_CLIENT_TOKEN="client_beta_token")
+        self.assertEqual(del_b.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Conversation.objects.filter(id=conv_id_a).exists())
+
+    def test_cross_conversation_media_attachment_protection(self):
+        """Test that media attachments from conversation A cannot be linked into conversation B."""
+        conv_a = Conversation.objects.create(client_token="tok_a")
+        conv_b = Conversation.objects.create(client_token="tok_b")
+
+        image_content = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4'
+        media_a = MediaAttachment.objects.create(
+            conversation=conv_a,
+            file=SimpleUploadedFile("pad.png", image_content, content_type="image/png"),
+            file_type="image",
+            original_name="pad.png"
+        )
+
+        # Chat in conversation B passes media_a id
+        res_b = self.client.post(
+            '/api/chat/',
+            {
+                "conversation_id": str(conv_b.id),
+                "message": "Is this bad?",
+                "media_attachment_ids": [str(media_a.id)]
+            },
+            format='json',
+            HTTP_X_CLIENT_TOKEN="tok_b"
+        )
+        self.assertEqual(res_b.status_code, status.HTTP_200_OK)
+
+        # Verify media_a was NOT linked to conversation B's message
+        media_a.refresh_from_db()
+        self.assertEqual(media_a.conversation_id, conv_a.id)
+        self.assertIsNone(media_a.message)
+
+    def test_error_message_formatting_clean_string(self):
+        """Test validation error produces 'message: This field may not be blank.' without ErrorDetail wrapper."""
+        res = self.client.post('/api/chat/', {"message": "   "}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        data = res.json()
+        self.assertFalse(data['success'])
+        self.assertIn("message: This field may not be blank.", data['error']['message'])
+        self.assertNotIn("ErrorDetail", data['error']['message'])
+
+    def test_symptom_category_updates_from_general(self):
+        """Test symptom_category transitions from general to specific when clear symptom keywords are provided."""
+        conv = Conversation.objects.create(symptom_category="general")
+        self.client.post('/api/chat/', {
+            "conversation_id": str(conv.id),
+            "message": "My brakes are squealing and grinding every time I stop."
+        }, format='json')
+        conv.refresh_from_db()
+        self.assertEqual(conv.symptom_category, "brakes")
+
+    def test_upload_file_exceeding_4mb_rejected(self):
+        """Test uploading a file larger than 4 MB is rejected with 400 validation error."""
+        large_content = b'0' * (5 * 1024 * 1024)  # 5 MB
+        large_file = SimpleUploadedFile("big_video.mp4", large_content, content_type="video/mp4")
+        res = self.client.post('/api/upload/', {"file": large_file}, format='multipart')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        data = res.json()
+        self.assertFalse(data['success'])
+        self.assertIn("File size exceeds maximum limit of 4MB", data['error']['message'])
+
 
