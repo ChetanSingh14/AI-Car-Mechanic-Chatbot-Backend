@@ -290,10 +290,11 @@ Populate with your configuration:
 ```env
 DEBUG=False
 SECRET_KEY=your_production_secret_key_here
-ALLOWED_HOSTS=*
+ALLOWED_HOSTS=13.234.4.236,localhost,127.0.0.1
 CSRF_TRUSTED_ORIGINS=https://*.vercel.app,http://<your-ec2-ip-or-domain>
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODELS=gemini-2.0-flash,gemini-1.5-flash,gemini-1.5-pro
+GEMINI_MODELS=gemini-2.5-flash,gemini-2.5-flash-lite,gemini-flash-latest
+# GROK_API_KEY=xai-your-key-here
 ```
 
 #### 5. Apply Migrations & Static Files
