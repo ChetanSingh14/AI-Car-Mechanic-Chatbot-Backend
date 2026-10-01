@@ -299,18 +299,11 @@ class BookingView(APIView):
         data = serializer.validated_data
 
         diag_id = data.get('diagnosis')
-        try:
-            diag_uuid = uuid.UUID(str(diag_id))
-            diag_obj = Diagnosis.objects.filter(id=diag_uuid).first()
-            if not diag_obj:
-                return Response(
-                    {"success": False, "error": {"code": "NOT_FOUND", "message": f"Diagnosis {diag_id} not found."}},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        except (ValueError, TypeError):
+        diag_obj = Diagnosis.objects.filter(id=diag_id).first()
+        if not diag_obj:
             return Response(
-                {"success": False, "error": {"code": "VALIDATION_ERROR", "message": "Invalid diagnosis UUID provided."}},
-                status=status.HTTP_400_BAD_REQUEST
+                {"success": False, "error": {"code": "NOT_FOUND", "message": f"Diagnosis {diag_id} not found."}},
+                status=status.HTTP_404_NOT_FOUND
             )
 
         try:
@@ -360,7 +353,7 @@ class BookingView(APIView):
 
         return Response({
             "success": True,
-            "data": BookingSerializer(Booking.objects.all()[:20], many=True).data
+            "data": BookingSerializer(Booking.objects.all()[:50], many=True).data
         }, status=status.HTTP_200_OK)
 
 
@@ -369,11 +362,13 @@ class ConversationDetailView(APIView):
     GET /api/conversation/{id}/
     Retrieve conversation metadata, message history, media attachments, and diagnosis.
     GET /api/conversation/
-    List recent conversations.
+    List recent conversations from DB.
+    DELETE /api/conversation/{id}/
+    Delete a conversation from DB.
     """
     def get(self, request, pk=None):
         if pk is None:
-            conversations = Conversation.objects.all()[:30]
+            conversations = Conversation.objects.prefetch_related('messages', 'media_attachments').all()[:50]
             return Response({
                 "success": True,
                 "data": ConversationSerializer(conversations, many=True, context={'request': request}).data
@@ -392,3 +387,23 @@ class ConversationDetailView(APIView):
             "success": True,
             "data": ConversationSerializer(conversation, context={'request': request}).data
         }, status=status.HTTP_200_OK)
+
+    def delete(self, request, pk=None):
+        if pk is None:
+            return Response(
+                {"success": False, "error": {"code": "BAD_REQUEST", "message": "Conversation ID is required."}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            val_uuid = uuid.UUID(str(pk))
+            conv = Conversation.objects.get(id=val_uuid)
+            conv.delete()
+            return Response({
+                "success": True,
+                "data": {"id": str(val_uuid), "deleted": True}
+            }, status=status.HTTP_200_OK)
+        except (ValueError, TypeError, Conversation.DoesNotExist):
+            return Response(
+                {"success": False, "error": {"code": "NOT_FOUND", "message": f"Conversation {pk} not found."}},
+                status=status.HTTP_404_NOT_FOUND
+            )

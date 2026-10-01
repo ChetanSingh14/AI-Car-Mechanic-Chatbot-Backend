@@ -48,6 +48,12 @@ class BookingSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'status']
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.diagnosis_id:
+            ret['diagnosis'] = str(instance.diagnosis_id)
+        return ret
+
     def get_diagnosis_detail(self, obj):
         if hasattr(obj, 'diagnosis') and obj.diagnosis:
             return DiagnosisSerializer(obj.diagnosis).data
