@@ -8,15 +8,19 @@ from rest_framework.test import APIClient
 from rest_framework import status
 
 from api.models import Conversation, Message, MediaAttachment, Diagnosis, Booking
+from api.services import GeminiMechanicService
 
 class CarMechanicAPITestCase(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.api_key_patcher = patch('api.services.gemini_service.GeminiMechanicService.get_api_key', return_value='')
         self.api_key_patcher.start()
+        self.grok_key_patcher = patch('api.services.gemini_service.GeminiMechanicService.get_grok_api_key', return_value='')
+        self.grok_key_patcher.start()
 
     def tearDown(self):
         self.api_key_patcher.stop()
+        self.grok_key_patcher.stop()
 
     def test_health_check_endpoint(self):
         """Test GET /api/health/ returns 200 OK and healthy status."""
@@ -408,5 +412,95 @@ class CarMechanicAPITestCase(TestCase):
         data = res.json()
         self.assertFalse(data['success'])
         self.assertIn("File size exceeds maximum limit of 4MB", data['error']['message'])
+
+    def test_privacy_no_token_rejected_on_token_owned_conversation(self):
+        """Test that requests lacking X-Client-Token cannot read, chat into, or delete token-owned sessions."""
+        conv = Conversation.objects.create(car_make="Subaru", car_model="Outback", client_token="token_alice_secured")
+        Message.objects.create(conversation=conv, sender="user", content="Whining steering sound")
+
+        # 1. No token reading detail -> 404
+        res_get = self.client.get(f'/api/conversation/{conv.id}/')
+        self.assertEqual(res_get.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 2. No token posting into chat -> 404
+        res_post = self.client.post('/api/chat/', {
+            "conversation_id": str(conv.id),
+            "message": "It gets louder when turning wheel"
+        }, format='json')
+        self.assertEqual(res_post.status_code, status.HTTP_404_NOT_FOUND)
+
+        # 3. No token attempting deletion -> 404
+        res_del = self.client.delete(f'/api/conversation/{conv.id}/')
+        self.assertEqual(res_del.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Conversation.objects.filter(id=conv.id).exists())
+
+        # 4. Valid token succeeds
+        res_valid = self.client.get(f'/api/conversation/{conv.id}/', HTTP_X_CLIENT_TOKEN="token_alice_secured")
+        self.assertEqual(res_valid.status_code, status.HTTP_200_OK)
+
+    def test_client_token_never_exposed_in_api_responses(self):
+        """Test that client_token is omitted from ConversationSerializer output to prevent token leaks."""
+        conv = Conversation.objects.create(car_make="Hyundai", car_model="Tucson", client_token="token_secret_12345")
+        res = self.client.get(f'/api/conversation/{conv.id}/', HTTP_X_CLIENT_TOKEN="token_secret_12345")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()['data']
+        self.assertNotIn('client_token', data)
+
+    def test_booking_list_requires_client_token_to_prevent_data_harvesting(self):
+        """Test that GET /api/booking/?email= without client token returns empty list instead of sensitive info."""
+        conv = Conversation.objects.create(client_token="alice_token_private")
+        diag = Diagnosis.objects.create(
+            conversation=conv,
+            issue_title="Starter Motor",
+            severity="high",
+            description="Starter click",
+            recommended_service="Starter Replacement",
+            estimated_cost="$300"
+        )
+        Booking.objects.create(
+            diagnosis=diag,
+            customer_name="Alice Wonderland",
+            customer_email="alice@wonderland.test",
+            customer_phone="+15550001111",
+            preferred_date=timezone.now().date() + datetime.timedelta(days=5),
+            preferred_time="09:00 AM"
+        )
+
+        # Request with NO token must return empty list (prevents leaking name/phone)
+        res_unauthenticated = self.client.get('/api/booking/?email=alice@wonderland.test')
+        self.assertEqual(res_unauthenticated.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_unauthenticated.json()['data']), 0)
+
+        # Request with matching client token returns the booking
+        res_authenticated = self.client.get('/api/booking/?email=alice@wonderland.test', HTTP_X_CLIENT_TOKEN="alice_token_private")
+        self.assertEqual(res_authenticated.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_authenticated.json()['data']), 1)
+        self.assertEqual(res_authenticated.json()['data'][0]['customer_name'], "Alice Wonderland")
+
+    def test_known_obd_lookup_returns_immediate_zero_token_technical_data(self):
+        """Test querying known OBD code (e.g., P0300) returns structured diagnosis without AI token consumption."""
+        res = self.client.post('/api/chat/', {
+            "message": "My Check Engine Light came on with code P0300"
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.json()['data']
+        self.assertTrue(data['success'] if 'success' in data else True)
+        self.assertFalse(data['is_ai_generated'])
+        content = data['assistant_message']['content']
+        self.assertIn("P0300", content)
+        self.assertIn("Random or Multiple Cylinder Misfire", content)
+        self.assertIn("Probable Root Causes", content)
+
+    @patch('api.services.gemini_service.GeminiMechanicService._call_grok_completion')
+    def test_grok_ai_fallback_on_gemini_unavailable(self, mock_grok):
+        """Test that when Gemini API is unavailable, system cascades to Grok AI fallback."""
+        mock_grok.return_value = "Grok Diagnostic Analysis: Spark plug fouling detected on cylinder 3."
+        conv = Conversation.objects.create(car_make="Ford", car_model="Focus", car_year="2018")
+        
+        # When Gemini has no key, it falls through to Grok
+        ai_res = GeminiMechanicService.generate_chat_response(conv, "Engine running rough with hesitation on acceleration")
+        self.assertTrue(ai_res['is_ai_generated'])
+        self.assertEqual(ai_res['text'], "Grok Diagnostic Analysis: Spark plug fouling detected on cylinder 3.")
+        mock_grok.assert_called_once()
 
 

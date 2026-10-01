@@ -17,8 +17,13 @@ if not SECRET_KEY:
         raise ValueError("CRITICAL: SECRET_KEY environment variable is required when DEBUG=False.")
     SECRET_KEY = 'django-insecure-dev-car-mechanic-chatbot-key-2026'
 
-raw_hosts = os.getenv('ALLOWED_HOSTS', '*')
-ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(',') if h.strip()] if raw_hosts else ['*']
+raw_hosts = os.getenv('ALLOWED_HOSTS', '')
+if raw_hosts:
+    ALLOWED_HOSTS = [h.strip() for h in raw_hosts.split(',') if h.strip()]
+elif DEBUG:
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '13.234.4.236', 'testserver']
 
 # Installed Apps
 INSTALLED_APPS = [
@@ -116,17 +121,39 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.FormParser',
     ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': os.getenv('DRF_THROTTLE_ANON', '120/min'),
+        'chat': os.getenv('DRF_THROTTLE_CHAT', '40/min'),
+        'upload': os.getenv('DRF_THROTTLE_UPLOAD', '20/min'),
+        'diagnosis': os.getenv('DRF_THROTTLE_DIAGNOSIS', '20/min'),
+    },
 }
 
 # CORS Configuration
+DEFAULT_CORS_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'https://*.vercel.app',
+]
+
 raw_cors = os.getenv('CORS_ALLOWED_ORIGINS', '')
 if raw_cors:
     CORS_ALLOWED_ORIGINS = [origin.strip() for origin in raw_cors.split(',') if origin.strip()]
     CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOW_CREDENTIALS = True
+elif not DEBUG:
+    CORS_ALLOWED_ORIGINS = DEFAULT_CORS_ORIGINS
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOW_CREDENTIALS = True
 else:
     CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_CREDENTIALS = False
 
-CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     '*',
 ]
@@ -145,6 +172,21 @@ raw_csrf = os.getenv('CSRF_TRUSTED_ORIGINS', '')
 if raw_csrf:
     CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in raw_csrf.split(',') if origin.strip()])
 
+# Security & Header Settings
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+ENABLE_HTTPS = os.getenv('ENABLE_HTTPS', 'False').lower() in ('true', '1', 't')
+if ENABLE_HTTPS:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
 # OpenAPI / Swagger Config
 SPECTACULAR_SETTINGS = {
     'TITLE': 'AI Car Mechanic Chatbot API',
@@ -153,5 +195,6 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
-# Gemini AI API Key
+# AI API Keys & Configuration
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GROK_API_KEY = os.getenv('GROK_API_KEY', '') or os.getenv('XAI_API_KEY', '')

@@ -29,14 +29,83 @@ DIAGNOSTIC GUIDELINES:
         if raw:
             return [m.strip() for m in raw.split(',') if m.strip()]
         return [
-            'gemini-2.0-flash',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro'
+            'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',
+            'gemini-flash-latest'
         ]
 
     @classmethod
     def get_api_key(cls):
         return getattr(settings, 'GEMINI_API_KEY', '') or os.getenv('GEMINI_API_KEY', '')
+
+    @classmethod
+    def get_grok_api_key(cls):
+        return (
+            getattr(settings, 'GROK_API_KEY', '') or
+            os.getenv('GROK_API_KEY', '') or
+            getattr(settings, 'XAI_API_KEY', '') or
+            os.getenv('XAI_API_KEY', '')
+        )
+
+    @classmethod
+    def get_grok_models(cls):
+        raw = os.getenv('GROK_MODELS', '')
+        if raw:
+            return [m.strip() for m in raw.split(',') if m.strip()]
+        return ['grok-2-latest', 'grok-2', 'grok-beta']
+
+    @classmethod
+    def _call_grok_completion(cls, system_prompt: str, user_prompt: str, json_mode: bool = False):
+        """
+        Secondary AI Fallback using xAI Grok API when Gemini quota/limits are reached or unavailable.
+        Uses OpenAI-compatible chat completions endpoint: https://api.x.ai/v1/chat/completions
+        """
+        api_key = cls.get_grok_api_key()
+        if not api_key:
+            return None
+
+        try:
+            import requests
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            for model_name in cls.get_grok_models():
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "temperature": 0.2
+                }
+                if json_mode:
+                    payload["response_format"] = {"type": "json_object"}
+
+                try:
+                    resp = requests.post(
+                        "https://api.x.ai/v1/chat/completions",
+                        headers=headers,
+                        json=payload,
+                        timeout=15
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        choices = data.get("choices", [])
+                        if choices and "message" in choices[0] and choices[0]["message"].get("content"):
+                            content = choices[0]["message"]["content"].strip()
+                            logger.info(f"Successfully generated AI response via Grok model {model_name}")
+                            return content
+                    else:
+                        logger.warning(f"Grok model {model_name} HTTP {resp.status_code}: {resp.text[:150]}")
+                except Exception as model_err:
+                    logger.warning(f"Grok model {model_name} connection error: {model_err}")
+                    continue
+        except Exception as e:
+            logger.warning(f"Could not execute Grok API completion: {e}")
+
+        return None
 
     @classmethod
     def analyze_media_file_once(cls, media_attachment):
@@ -142,9 +211,21 @@ DIAGNOSTIC GUIDELINES:
                         continue
 
             except Exception as e:
-                logger.error(f"Gemini API error: {e}. Falling back to Senior Technician Rule Engine.")
+                logger.error(f"Gemini API error: {e}. Checking Grok fallback...")
 
-        # Senior Technician Fallback Engine
+        # Secondary AI Fallback: xAI Grok API
+        grok_response = cls._call_grok_completion(
+            system_prompt=cls.SYSTEM_PROMPT,
+            user_prompt=prompt,
+            json_mode=False
+        )
+        if grok_response:
+            return {
+                "text": grok_response,
+                "is_ai_generated": True
+            }
+
+        # Senior Technician Fallback Engine (Rules)
         return {
             "text": cls._fallback_technician_response(car_info, user_message_text, media_attachments),
             "is_ai_generated": False
@@ -153,7 +234,7 @@ DIAGNOSTIC GUIDELINES:
     @classmethod
     def generate_diagnosis(cls, conversation):
         """
-        Generate structured JSON diagnosis using Gemini or the expert fallback matrix.
+        Generate structured JSON diagnosis using Gemini, Grok fallback, or the expert rule matrix.
         Returns: (diag_dict, is_ai_generated)
         """
         api_key = cls.get_api_key()
@@ -205,7 +286,26 @@ JSON format required (no extra markdown outside of json):
                         logger.warning(f"Diagnosis generation on {model_name} failed: {diag_err}. Rotating...")
                         continue
             except Exception as e:
-                logger.error(f"Gemini Diagnosis JSON Error: {e}")
+                logger.error(f"Gemini Diagnosis JSON Error: {e}. Checking Grok fallback...")
+
+        # Secondary AI Fallback: Grok (xAI) API for structured JSON diagnosis
+        grok_diag = cls._call_grok_completion(
+            system_prompt="You are an expert ASE Master Automotive Diagnostic Technician. Output ONLY a valid JSON object matching the requested schema.",
+            user_prompt=prompt,
+            json_mode=True
+        )
+        if grok_diag:
+            try:
+                raw_text = grok_diag.strip()
+                if "```json" in raw_text:
+                    raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw_text:
+                    raw_text = raw_text.split("```")[1].split("```")[0].strip()
+                parsed = json.loads(raw_text)
+                if 'issue_title' in parsed and 'recommended_service' in parsed:
+                    return parsed, True
+            except Exception as parse_err:
+                logger.warning(f"Could not parse Grok JSON diagnosis: {parse_err}")
 
         # Fallback Diagnostic Matrix based on keyword matching
         return cls._fallback_diagnosis_matrix(complaint_text, car_info), False

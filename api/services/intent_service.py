@@ -53,6 +53,166 @@ class IntentService:
     # OBD-II Diagnostic Trouble Code Pattern (e.g., P0300, B1000, C0123, U0100)
     OBD_PATTERN = re.compile(r'\b[PBCU]\d{4}\b', re.IGNORECASE)
 
+    # Curated technical knowledge base for common OBD-II trouble codes (0-Token instant lookup)
+    KNOWN_OBD_CODES = {
+        'P0300': {
+            'definition': 'Random or Multiple Cylinder Misfire Detected',
+            'system': 'Ignition & Fuel Delivery System',
+            'severity': 'High (Flashing Check Engine Light warns of catalytic converter damage)',
+            'common_causes': [
+                'Worn or fouled spark plugs / failed ignition coils',
+                'Low fuel pressure or clogged fuel injectors',
+                'Intake manifold vacuum leak or faulty PCV valve',
+                'Faulty camshaft or crankshaft position sensor'
+            ],
+            'recommended_steps': [
+                'Avoid heavy engine load or highway speeds if the Check Engine Light is flashing.',
+                'Inspect spark plug electrodes and ignition coil boots for carbon tracking or oil fouling.',
+                'Perform a fuel pressure test and check long-term fuel trims with a scan tool.'
+            ]
+        },
+        'P0301': {
+            'definition': 'Cylinder 1 Misfire Detected',
+            'system': 'Ignition & Fuel System',
+            'severity': 'Medium to High',
+            'common_causes': [
+                'Faulty Cylinder 1 ignition coil or spark plug',
+                'Clogged or leaking Cylinder 1 fuel injector',
+                'Low mechanical compression in Cylinder 1'
+            ],
+            'recommended_steps': [
+                'Swap ignition coil #1 to coil #2 to determine if the misfire follows the coil.',
+                'Inspect spark plug #1 for carbon deposits or fuel wetting.'
+            ]
+        },
+        'P0420': {
+            'definition': 'Catalyst System Efficiency Below Threshold (Bank 1)',
+            'system': 'Exhaust & Emissions Control System',
+            'severity': 'Moderate (Emissions test failure; safe for short-term driving)',
+            'common_causes': [
+                'Degraded or contaminated Catalytic Converter matrix',
+                'Defective downstream Oxygen (O2) Sensor (Sensor 2)',
+                'Exhaust leak upstream of or directly at the catalytic converter',
+                'Unburned engine oil or coolant entering exhaust stream'
+            ],
+            'recommended_steps': [
+                'Graph downstream O2 sensor voltage (should remain steady around 0.45V at idle).',
+                'Inspect exhaust flanges and pipes for soot leaks or cracked welds.',
+                'Ensure underlying misfires (P0300) are resolved prior to catalytic converter replacement.'
+            ]
+        },
+        'P0171': {
+            'definition': 'System Too Lean (Bank 1 - Too much air / too little fuel)',
+            'system': 'Air-Fuel Metering & Induction System',
+            'severity': 'Medium (May cause hesitation, rough idle, and increased combustion temps)',
+            'common_causes': [
+                'Dirty or contaminated Mass Air Flow (MAF) Sensor',
+                'Unmetered vacuum leak (cracked intake boot, PCV hose, intake gasket)',
+                'Weak fuel pump, clogged fuel filter, or restricted injectors',
+                'Faulty upstream Oxygen Sensor reporting false lean'
+            ],
+            'recommended_steps': [
+                'Clean MAF sensor elements with dedicated electronic aerosol cleaner.',
+                'Perform an intake smoke test to detect cracked rubber hoses and vacuum leaks.',
+                'Verify fuel pressure under load matches OEM specification.'
+            ]
+        },
+        'P0172': {
+            'definition': 'System Too Rich (Bank 1 - Too much fuel / too little air)',
+            'system': 'Air-Fuel Metering System',
+            'severity': 'Medium (Unburned fuel degrades oil and damages catalytic converter)',
+            'common_causes': [
+                'Leaking or stuck-open fuel injector',
+                'Defective fuel pressure regulator causing excessive rail pressure',
+                'Severely clogged engine air filter',
+                'Faulty Engine Coolant Temperature (ECT) sensor reading falsely cold'
+            ],
+            'recommended_steps': [
+                'Check air filter element for heavy dirt or restriction.',
+                'Verify fuel rail pressure and check for vacuum regulator fuel leaks.',
+                'Verify coolant temperature sensor live readings match actual engine temperature.'
+            ]
+        },
+        'P0442': {
+            'definition': 'Evaporative Emission (EVAP) Control System Small Leak Detected',
+            'system': 'EVAP Fuel Vapor Recovery System',
+            'severity': 'Low (Emissions compliance; does not affect drivability)',
+            'common_causes': [
+                'Loose, worn, or aftermarket fuel tank filler cap',
+                'Deteriorated EVAP vapor hose or cracked charcoal canister',
+                'Partially stuck-open EVAP canister vent valve or purge solenoid'
+            ],
+            'recommended_steps': [
+                'Inspect the rubber gasket on the fuel cap for cracks or debris; tighten securely.',
+                'Clear trouble code and operate vehicle across two driving cycles.',
+                'Conduct an EVAP low-pressure smoke test if the code returns.'
+            ]
+        },
+        'P0455': {
+            'definition': 'Evaporative Emission (EVAP) System Gross / Large Leak Detected',
+            'system': 'EVAP Fuel Vapor Recovery System',
+            'severity': 'Low to Medium',
+            'common_causes': [
+                'Fuel filler cap missing, cross-threaded, or unlatched',
+                'Disconnected or severed EVAP purge line',
+                'Stuck wide-open EVAP vent solenoid'
+            ],
+            'recommended_steps': [
+                'Inspect fuel cap fitment and fuel filler neck condition.',
+                'Verify EVAP purge solenoid seals completely under vacuum.'
+            ]
+        },
+        'P0128': {
+            'definition': 'Coolant Temperature Below Thermostat Regulating Temperature',
+            'system': 'Engine Thermal Cooling System',
+            'severity': 'Low to Medium (Slow cabin heat, increased fuel consumption)',
+            'common_causes': [
+                'Engine thermostat stuck open or opening prematurely',
+                'Defective Engine Coolant Temperature (ECT) sensor',
+                'Low engine coolant level preventing sensor submersion'
+            ],
+            'recommended_steps': [
+                'Check engine coolant level in overflow reservoir and radiator (when cold).',
+                'Replace thermostat assembly and perform cooling system air bleed.'
+            ]
+        },
+        'P0700': {
+            'definition': 'Transmission Control System Malfunction (MIL Request)',
+            'system': 'Automatic Transmission / Transaxle Powertrain',
+            'severity': 'High (Requires dedicated transmission diagnostic scan)',
+            'common_causes': [
+                'Transmission Control Module (TCM) logged a mechanical or hydraulic fault',
+                'Low, deteriorated, or contaminated automatic transmission fluid (ATF)',
+                'Shift solenoid or torque converter clutch (TCC) circuit issue'
+            ],
+            'recommended_steps': [
+                'Inspect transmission fluid level and condition (burnt odor or dark coloration).',
+                'Scan the TCM module with an advanced OBD-II tool to retrieve specific P07xx subcodes.'
+            ]
+        }
+    }
+
+    @classmethod
+    def get_known_obd_response(cls, code: str, car_info: str = "") -> str:
+        code_upper = code.upper()
+        data = cls.KNOWN_OBD_CODES.get(code_upper)
+        if not data:
+            return None
+
+        vehicle_prefix = f" for your {car_info}" if car_info else ""
+        causes_str = "\n".join(f"• {cause}" for cause in data['common_causes'])
+        steps_str = "\n".join(f"{i+1}. {step}" for i, step in enumerate(data['recommended_steps']))
+
+        return (
+            f"🔍 **OBD-II Technical Diagnosis: Code {code_upper}**\n\n"
+            f"• **Definition:** {data['definition']}\n"
+            f"• **Subsystem:** {data['system']}\n"
+            f"• **Diagnostic Severity:** {data['severity']}\n\n"
+            f"**Probable Root Causes{vehicle_prefix}:**\n{causes_str}\n\n"
+            f"**Recommended Diagnostic & Inspection Steps:**\n{steps_str}\n\n"
+            f"💡 *Knowledge Base Lookup (0 AI Tokens). Would you like me to generate a full formal repair diagnosis and estimate?*"
+        )
+
     @classmethod
     def evaluate_intent(cls, message_text: str, conversation):
         """
@@ -139,6 +299,19 @@ class IntentService:
                 "is_car_related": False,
                 "extracted_info": extracted
             }
+
+        # 4. Instant Zero-Token OBD-II Trouble Code Knowledge Base Lookup
+        if has_obd_code:
+            for raw_code in obd_matches:
+                code_upper = raw_code.upper()
+                if code_upper in cls.KNOWN_OBD_CODES:
+                    car_info = f"{conversation.car_year or ''} {conversation.car_make or extracted.get('car_make') or ''} {conversation.car_model or ''}".strip()
+                    return {
+                        "action": "OBD_LOOKUP",
+                        "response_text": cls.get_known_obd_response(code_upper, car_info),
+                        "is_car_related": True,
+                        "extracted_info": extracted
+                    }
 
         # 4. Follow-up inquiry heuristic: when user query is too vague
         msg_count = conversation.messages.count()

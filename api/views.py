@@ -3,6 +3,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
+from rest_framework.throttling import ScopedRateThrottle
 from drf_spectacular.utils import (
     extend_schema, OpenApiResponse, OpenApiParameter, OpenApiExample, inline_serializer
 )
@@ -40,8 +41,8 @@ def resolve_conversation(conversation_id_str, client_token=None):
                 {"success": False, "error": {"code": "NOT_FOUND", "message": f"Conversation {conversation_id_str} not found."}},
                 status=status.HTTP_404_NOT_FOUND
             )
-        # Privacy isolation: if conversation has a token and request has a token, verify match
-        if conv.client_token and client_token and conv.client_token != client_token:
+        # Privacy isolation: if conversation has a token, verify matching client_token is provided
+        if conv.client_token and conv.client_token != client_token:
             return None, Response(
                 {"success": False, "error": {"code": "NOT_FOUND", "message": f"Conversation {conversation_id_str} not found."}},
                 status=status.HTTP_404_NOT_FOUND
@@ -98,6 +99,8 @@ class ChatView(APIView):
     Send a message to the AI Automobile Technician chatbot.
     Minimizes AI API usage by utilizing traditional rule-based intent classification.
     """
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'chat'
     @extend_schema(
         operation_id="chat_send_message",
         summary="Send Diagnostic Chat Message",
@@ -260,7 +263,7 @@ class ChatView(APIView):
 
         conversation.save()
 
-        if intent_result['action'] in ['REJECT', 'FOLLOWUP']:
+        if intent_result['action'] in ['REJECT', 'FOLLOWUP', 'OBD_LOOKUP']:
             assistant_response_text = intent_result['response_text']
             is_ai = False
         else:
@@ -298,6 +301,8 @@ class UploadView(APIView):
     POST /api/upload/
     Upload media files (Image, Audio, Video, Max 4 MB) for diagnostic analysis.
     """
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'upload'
     @extend_schema(
         operation_id="upload_media_file",
         summary="Upload Diagnostic Media (Max 4 MB)",
@@ -397,6 +402,8 @@ class DiagnosisView(APIView):
     POST /api/diagnosis/
     Generate official diagnosis, repair recommendations, and estimated costs.
     """
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'diagnosis'
     @extend_schema(
         operation_id="diagnosis_generate",
         summary="Generate Formal Vehicle Diagnosis & Repair Estimate",
@@ -576,7 +583,7 @@ class BookingListView(APIView):
             )
 
         # Privacy check: if conversation has a client_token, verify match
-        if diag_obj.conversation.client_token and client_token and diag_obj.conversation.client_token != client_token:
+        if diag_obj.conversation.client_token and diag_obj.conversation.client_token != client_token:
             return Response(
                 {"success": False, "error": {"code": "NOT_FOUND", "message": f"Diagnosis {diag_id} not found."}},
                 status=status.HTTP_404_NOT_FOUND
@@ -647,12 +654,11 @@ class BookingListView(APIView):
 
         queryset = Booking.objects.all()
 
-        # Privacy isolation: filter bookings by client_token of the conversation
-        if client_token:
-            queryset = queryset.filter(diagnosis__conversation__client_token=client_token)
-        elif not email:
-            # If no client_token and no email provided, return empty for privacy
+        # Privacy isolation: require client_token to list bookings
+        if not client_token:
             return Response({"success": True, "data": []}, status=status.HTTP_200_OK)
+
+        queryset = queryset.filter(diagnosis__conversation__client_token=client_token)
 
         if email:
             queryset = queryset.filter(customer_email__iexact=email.strip())
@@ -844,7 +850,7 @@ class ConversationDetailView(APIView):
         try:
             val_uuid = uuid.UUID(str(pk))
             conversation = Conversation.objects.prefetch_related('messages', 'media_attachments').get(id=val_uuid)
-            if conversation.client_token and client_token and conversation.client_token != client_token:
+            if conversation.client_token and conversation.client_token != client_token:
                 return Response(
                     {"success": False, "error": {"code": "NOT_FOUND", "message": f"Conversation {pk} not found."}},
                     status=status.HTTP_404_NOT_FOUND
@@ -899,7 +905,7 @@ class ConversationDetailView(APIView):
         try:
             val_uuid = uuid.UUID(str(pk))
             conv = Conversation.objects.get(id=val_uuid)
-            if conv.client_token and client_token and conv.client_token != client_token:
+            if conv.client_token and conv.client_token != client_token:
                 return Response(
                     {"success": False, "error": {"code": "NOT_FOUND", "message": f"Conversation {pk} not found."}},
                     status=status.HTTP_404_NOT_FOUND

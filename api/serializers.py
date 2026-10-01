@@ -76,8 +76,8 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Conversation
-        fields = ['id', 'car_make', 'car_model', 'car_year', 'symptom_category', 'client_token', 'status', 'messages', 'media_attachments', 'diagnosis', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'client_token', 'created_at', 'updated_at']
+        fields = ['id', 'car_make', 'car_model', 'car_year', 'symptom_category', 'status', 'messages', 'media_attachments', 'diagnosis', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class ChatRequestSerializer(serializers.Serializer):
